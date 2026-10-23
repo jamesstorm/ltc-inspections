@@ -432,6 +432,7 @@ def render_dashboard(homes, insp, findings, region_label):
     template = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='18' fill='%232563eb'/%3E%3Cpath d='M50 30v40M30 50h40' stroke='%23fff' stroke-width='13' stroke-linecap='round'/%3E%3C/svg%3E">
 <title>Ontario LTC Inspection Comparison</title>
 <style>
 :root{--ink:#1a1c24;--muted:#6b7280;--line:#e6e8ee;--find:#e0552b;--zero:#d7dbe4;--bg:#f6f7fa;--accent:#2f6df6}
@@ -657,6 +658,7 @@ def render_home_dashboard(home, insp, findings):
     template = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='18' fill='%232563eb'/%3E%3Cpath d='M50 30v40M30 50h40' stroke='%23fff' stroke-width='13' stroke-linecap='round'/%3E%3C/svg%3E">
 <title>@@NAME@@ — Inspection History</title>
 <style>
 :root{--ink:#1a1c24;--muted:#6b7280;--line:#e6e8ee;--find:#e0552b;--bg:#f6f7fa;--accent:#2f6df6}
