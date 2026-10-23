@@ -276,10 +276,29 @@ def cmd_fetch(args):
     targets = collect_targets(c, args)
     delay = float(getattr(args, "delay", DELAY))
     print("Homes to process: %d (detail delay ~%.2fs)" % (len(targets), delay), flush=True)
+    empty_streak = 0
     for home in targets:
         hn = str(home["Home_Number__c"])
         reps = home_report_list(hn)
         time.sleep(min(delay, 0.6))
+        # An empty list for a known home is usually guest-API throttling, not
+        # "no data": retry with backoff, and pause longer on a run of empties.
+        tries = 0
+        while not reps and tries < 2:
+            tries += 1
+            wait = 5 * tries
+            print("    [retry] %s empty, backoff %ds (try %d)" % (hn, wait, tries), flush=True)
+            time.sleep(wait)
+            reps = home_report_list(hn)
+        if not reps:
+            empty_streak += 1
+            if empty_streak >= 5:
+                print("    [throttle] %d empties in a row - pausing 90s" % empty_streak, flush=True)
+                time.sleep(90)
+                empty_streak = 0
+                reps = home_report_list(hn)
+        else:
+            empty_streak = 0
         if reps:
             home["Home_Name__c"] = home.get("Home_Name__c") or reps[0].get("Home_Name__c")
             home["Home_City__c"] = home.get("Home_City__c") or reps[0].get("Home_City__c")
