@@ -12,3 +12,6 @@ venv/
 # Local config / secrets
 *.env
 .env
+
+# generated whole-province home list (reproducible by enumeration)
+geo/all_ontario_homes.*

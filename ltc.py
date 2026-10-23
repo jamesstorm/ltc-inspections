@@ -24,6 +24,7 @@ import csv
 import html as _h
 import json
 import re
+import random
 import sqlite3
 import sys
 import time
@@ -252,11 +253,8 @@ def collect_targets(c, args):
 
     if args.homes:
         for hn in [x.strip() for x in args.homes.split(",") if x.strip()]:
-            reps = home_report_list(hn)
-            homes[hn] = {"Home_Number__c": hn,
-                         "Home_Name__c": reps[0].get("Home_Name__c") if reps else None,
-                         "Home_City__c": reps[0].get("Home_City__c") if reps else None,
-                         "Licensee__c": None}
+            # name/city are resolved (throttled) in cmd_fetch; avoid a burst here
+            homes[hn] = {"Home_Number__c": hn, "Home_Name__c": None, "Home_City__c": None, "Licensee__c": None}
             upsert_home(c, homes[hn], "homes")
     else:
         if args.geo:
@@ -276,10 +274,12 @@ def collect_targets(c, args):
 def cmd_fetch(args):
     c = db()
     targets = collect_targets(c, args)
-    print("Homes to process: %d" % len(targets), flush=True)
+    delay = float(getattr(args, "delay", DELAY))
+    print("Homes to process: %d (detail delay ~%.2fs)" % (len(targets), delay), flush=True)
     for home in targets:
         hn = str(home["Home_Number__c"])
         reps = home_report_list(hn)
+        time.sleep(min(delay, 0.6))
         if reps:
             home["Home_Name__c"] = home.get("Home_Name__c") or reps[0].get("Home_Name__c")
             home["Home_City__c"] = home.get("Home_City__c") or reps[0].get("Home_City__c")
@@ -293,7 +293,7 @@ def cmd_fetch(args):
                     "SELECT 1 FROM inspections WHERE inspection_id=? AND fetched_at IS NOT NULL",
                     (iid,)).fetchone():
                 continue
-            time.sleep(DELAY)
+            time.sleep(delay * (0.8 + 0.4 * random.random()))
             raw = report_detail(iid, hn)
             store_detail(c, iid, hn, raw, parse_detail(raw))
             c.commit()
@@ -839,6 +839,8 @@ def main():
     f.add_argument("--geo", help="text file of search terms, one per line (# comments ok)")
     f.add_argument("--homes", help="comma list of home numbers to fetch only")
     f.add_argument("--force", action="store_true", help="re-fetch even if cached")
+    f.add_argument("--delay", type=float, default=DELAY,
+                   help="seconds between report-detail calls (default 0.25; use ~0.9 for large province-wide crawls)")
     f.set_defaults(fn=cmd_fetch)
     r = sub.add_parser("report", help="render the HTML site + CSVs from the cache")
     r.add_argument("--out", default=str(BASE / "data" / "report"))
