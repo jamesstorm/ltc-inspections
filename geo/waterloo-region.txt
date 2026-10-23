@@ -1,0 +1,9 @@
+# Example search-term list for `ltc.py fetch --geo`.
+# One term per line; '#' starts a comment. Terms can be cities, towns, or
+# postal-code areas (matched by home name or location).
+#
+# Below: the Waterloo Region (Kitchener / Waterloo / Cambridge / Galt).
+Kitchener
+Waterloo
+Cambridge
+Galt

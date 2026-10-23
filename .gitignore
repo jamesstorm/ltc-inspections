@@ -1,0 +1,14 @@
+# Scraped data + rendered site stay OUT of this public repo
+ltc.db
+*.db
+data/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Local config / secrets
+*.env
+.env
