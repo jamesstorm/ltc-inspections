@@ -98,99 +98,349 @@ def clean(t):
 
 FINDING_HEAD = re.compile(
     r"WRITTEN\s+NOTIFICATION:|NOTICE\s+OF\s+ADMINISTRATIVE\s+MONETARY\s+PENALTY\s*\(AMP\)", re.I)
-# "Non-compliance with: FLTCA, 2021, s. 6(1)(c)"  OR  "Non-Compliance with FLTCA, 2021, s. 184(3)"
-STATUTE_RE = re.compile(
-    r"Non[-\s]?[Cc]ompliance\s+with:?\s*(.+?)(?=\s+(?:The\s+licensee|During|Rationale|Sources|NC\s*#|$))",
-    re.I)
+# WN_Details__c arrives as ministry HTML whose structure varies by report era:
+#   2023-era: NC line / "Non-compliance with: <cite>" / violation sentence /
+#             "Rationale and Summary" / narrative paragraphs / "Sources:" / [ref]
+#   2024-26:  NC line / "Non-compliance with: <cite>" / heading + quoted rule text
+#             (recited "s. N (M) ...") / incident narrative / "Sources:"
+#   AMP:      header (no title) / failed-to-comply line / "Notice of AMP #N" /
+#             "Related to Written Notification NC #N" / s.158 fine paragraph /
+#             "Compliance History:" boilerplate
+# Parsing works on the HTML line structure, not flattened text: field labels are
+# matched line-first (era variants tolerated: "Source:" / "Sources :" / numbered
+# "1- " prefixes), quoted rule text is anchored on the "s. N" recitation line,
+# and AMP boilerplate is cut at "Compliance History:".
+
+_WN_NEWLINE = re.compile(r"<br\s*/?>|</p>|</li>|</div>|</h\d>|</tr>|</td>|</ul>", re.I)
+_WN_ANY_TAG = re.compile(r"<[^>]+>")
+_WN_OPEN_TAGGED = re.compile(r"<(?:strong|span|b|i|u|em)\b[^>]*>", re.I)
+_WN_CLOSE_TAGGED = re.compile(r"</(?:strong|span|b|i|u|em)>", re.I)
+_WN_ZW = re.compile(r"[\u200b\u200c\u200d\ufeff]")
 
 
-def _strip_tags(s):
-    """Strip HTML to plain text. Block-level tags become a space (so words
-    don't merge across blocks); inline tags are removed entirely (so a
-    mid-word tag like WRITT<u>EN</u> merges back to WRITTEN)."""
-    s = re.sub(r"<(br|/p|/li|/div|/h\d|/span|/strong|/ul|/tr|/td)[^>]*>", " ", s or "", flags=re.I)
-    s = re.sub(r"<[^>]+>", "", s)
-    s = _h.unescape(s)
-    return re.sub(r"\s+", " ", s).strip()
+def _wn_lines(wn_html):
+    """Split ministry HTML into (text, tagged) lines; empty text = paragraph break.
+
+    Line breaks happen only at true block boundaries (br/p/li/div/h/tr/td/ul);
+    inline tags (strong/span/b/i/u/em) emit no text, so a header split
+    mid-word (<strong>W</strong><strong>RITTEN NOTIFICATION</strong>) rejoins
+    correctly. A double break marks a paragraph. "tagged" = line sat inside a
+    styled element (used to tell quoted rule text from plain narrative).
+    """
+    if not wn_html:
+        return []
+    in_tagged = 0
+    out, buf, buf_tag = [], [], False
+    i, n = 0, len(wn_html)
+    last_was_break = False
+
+    def flush():
+        t = _WN_ZW.sub("", "".join(buf))
+        return re.sub(r"\s+", " ", t).strip()
+
+    while i < n:
+        if wn_html[i] == "<":
+            m = _WN_ANY_TAG.match(wn_html, i)
+            if not m:
+                buf.append(">"); i += 1; continue
+            tag = m.group(0)
+            if _WN_NEWLINE.match(tag):
+                t = flush()
+                if t:
+                    out.append((t, buf_tag or in_tagged > 0))
+                elif not last_was_break and out:
+                    out.append(("", False))
+                buf, buf_tag = [], False
+                in_tagged = 0
+                last_was_break = True
+            else:
+                last_was_break = False
+                if tag.startswith("</"):
+                    if _WN_CLOSE_TAGGED.match(tag):
+                        in_tagged = max(0, in_tagged - 1)
+                elif _WN_OPEN_TAGGED.match(tag):
+                    in_tagged += 1
+            i = m.end()
+        else:
+            em = re.match(r"&#?\w+;", wn_html[i:])
+            if em:
+                buf.append(_h.unescape(em.group(0)))
+                if in_tagged: buf_tag = True
+                i += len(em.group(0))
+            else:
+                buf.append(wn_html[i])
+                if in_tagged: buf_tag = True
+                i += 1
+            last_was_break = False
+    t = flush()
+    if t:
+        out.append((t, buf_tag or in_tagged > 0))
+    return out
+
+
+_WN_NC_RE = re.compile(r"^NC\s*#?\s*(\d*)\s+Written\s+Notification\s+pursuant\s+to\s+(.+)$", re.I)
+_WN_STAT_LINE_RE = re.compile(r"^Non[-\s]?[Cc]ompliance\s+with\s*[:\s]*(.+)$", re.I)
+_WN_RATIONALE_RE = re.compile(r"^(?:\d+[\.)\-]\s*|\d+\s*[-)]\s*)?Rationale\s+and\s+Summary\s*:?\s*(.*)$", re.I)
+_WN_SOURCES_RE = re.compile(r"^(?:\d+[\.)\-]\s*|\d+\s*[-)]\s*)?Sources?\s*:\s*(.*)$", re.I)
+_WN_RECITE_RE = re.compile(r"^s\.?\s*\d+", re.I)
+_WN_CIT_MARK = re.compile(r"\s+\d+\.\s*$")
+_WN_AMP_BRIDGE_RE = re.compile(r"^An\s+Administrative\s+Monetary\s+Penalty", re.I)
+_WN_AMP_NUM_RE = re.compile(r"^Notice\s+of\s+Administrative\s+Monetary\s+Penalty\s+AMP\s*#?\s*(\d*)", re.I)
+_WN_AMP_REL_RE = re.compile(r"Related\s+to\s+Written\s+Notification\s+NC\s*#?\s*(\d*)", re.I)
+_WN_AMP_STOP_RE = re.compile(
+    r"^(Compliance History|This is the (?:first|second|third|fourth|fifth)"
+    r"|Invoice with payment|Licensees must not pay|By submitting a payment)", re.I)
+# narrative (incident description) start — used only inside quoted-rule units
+_WN_NARR_RE = re.compile(
+    r"^(?:The licensee (?:has|was|were|failed|did|is not|was not|should|must not|is required to have)"
+    r"|Staff\b|An incident|A resident|The home\b|The resident\b|During\b|Ongoing\b|One of\b|It\b|On day\b)", re.I)
+_WN_MID_SOURCES_RE = re.compile(r"\s+Sources?\s*:\s*")
+
+
+def _wn_clean_cite(s):
+    """Drop the trailing source-citation marker ("... s. 154 (1) 1." -> "... s. 154 (1)")."""
+    return _WN_CIT_MARK.sub("", s or "").strip()
+
+
+def _wn_is_label(t, kind):
+    if _WN_NC_RE.match(t) or _WN_RATIONALE_RE.match(t) or _WN_SOURCES_RE.match(t):
+        return True
+    if kind == "WN":
+        return bool(_WN_STAT_LINE_RE.match(t) or _WN_AMP_BRIDGE_RE.match(t))
+    if kind == "AMP":
+        return bool(_WN_AMP_NUM_RE.match(t) or _WN_AMP_STOP_RE.match(t) or _WN_AMP_BRIDGE_RE.match(t)
+                    or re.match(r"^Related\s+to\s+Written\s+Notification", t, re.I))
+    return False
+
+
+def _wn_units(lines, kind):
+    """Yield ('label', text, tagged) | ('body', [(text, tagged), ...]) | ('pb', None)."""
+    pending = []
+    for t, tg in lines[1:]:
+        if t == "":
+            if pending:
+                yield ("body", pending)
+                pending = []
+            yield ("pb", None)
+            continue
+        if _wn_is_label(t, kind):
+            if pending:
+                yield ("body", pending)
+                pending = []
+            yield ("label", t, tg)
+        else:
+            pending.append((t, tg))
+    if pending:
+        yield ("body", pending)
+
+
+def _wn_split_midsources(lines, res):
+    """Split body lines containing a mid-line 'Sources:' label; the tail moves to res['sources']."""
+    out = []
+    for t, tg in lines:
+        m = _WN_MID_SOURCES_RE.search(t)
+        if m:
+            out.append((t[:m.start()], tg))
+            tail = t[m.end():]
+            if tail:
+                res["sources"] = (res["sources"] + "; " + tail) if res["sources"] else tail
+        else:
+            out.append((t, tg))
+    return [x for x in out if x[0].strip()]
+
+
+def _wn_split_unit(lines):
+    """Split a body unit into (quoted, summary) line lists.
+
+    Quoted rule text = the heading line + the "s. N (M)" recitation + its
+    continuations; the incident narrative is the contiguous tail starting at
+    the first clearly-narrative line.
+    """
+    recite_i = None
+    for i, (t, _) in enumerate(lines):
+        if _WN_RECITE_RE.match(t):
+            recite_i = i
+            break
+    if recite_i is None:
+        return [], [t for t, _ in lines]
+    nstart = len(lines)
+    for i in range(recite_i + 1, len(lines)):
+        if _WN_NARR_RE.match(lines[i][0]):
+            nstart = i
+            break
+    return [t for t, _ in lines[:nstart]], [t for t, _ in lines[nstart:]]
+
+
+def _wn_parse_block(lines, kind):
+    """Parse one finding block (list of (text, tagged) lines, header line first).
+
+    Returns a field dict, or None for a content-less header (doubled
+    "WRITTEN NOTIFICATION:" lines in the source data).
+    """
+    res = {"title": "", "nc": "", "pursuant_to": "", "statute": "", "quoted": "",
+           "summary": "", "rationale": "", "sources": "", "related_nc": "", "ampnum": ""}
+    h = lines[0][0]
+    tm = re.search(r"WRITTEN\s+NOTIFICATION\s*:?\s*(.*)$", h, re.I)
+    if tm:
+        res["title"] = re.sub(r"^WRITTEN\s+NOTIFICATION\s*:?\s*", "", tm.group(1), flags=re.I).strip()
+    mode = None
+    stop = False
+    body_units = []  # (lines, pre_tag: 'quote' | None)
+    amp_title = False
+    for ukind, payload, *rest in _wn_units(lines, kind):
+        if stop:
+            break
+        if ukind == "pb":
+            continue
+        if ukind == "label":
+            t = payload
+            m = _WN_AMP_BRIDGE_RE.match(t)
+            if m and kind == "WN":
+                stop = True  # bridge line into the AMP block; stop collecting
+                break
+            m = _WN_RATIONALE_RE.match(t)
+            if m:
+                mode = "rationale"
+                if m.group(1).strip():
+                    res["rationale"] = m.group(1).strip()
+                continue
+            m = _WN_SOURCES_RE.match(t)
+            if m:
+                mode = "sources"
+                tail = m.group(1).strip()
+                if tail:
+                    res["sources"] = (res["sources"] + "; " + tail) if res["sources"] else tail
+                continue
+            m = _WN_NC_RE.match(t)
+            if m:
+                if not res["nc"] and not res["pursuant_to"]:
+                    res["nc"] = m.group(1)
+                    res["pursuant_to"] = _wn_clean_cite(m.group(2))
+                continue
+            if kind == "WN":
+                m = _WN_STAT_LINE_RE.match(t)
+                if m:
+                    if not res["statute"]:
+                        res["statute"] = _wn_clean_cite(m.group(1))
+                    else:
+                        body_units.append(([(t, True)], "quote"))  # secondary dual-cite context
+                    continue
+            if kind == "AMP":
+                m = _WN_AMP_NUM_RE.match(t)
+                if m:
+                    res["ampnum"] = m.group(1)
+                    continue
+                m = _WN_AMP_REL_RE.search(t)
+                if m:
+                    res["related_nc"] = m.group(1)
+                    continue
+                if _WN_AMP_STOP_RE.match(t):
+                    stop = True  # "Compliance History:" boilerplate follows
+                    break
+        # body
+        ptext_lines = _wn_split_midsources(payload, res)
+        if mode == "rationale":
+            res["rationale"] += (" " if res["rationale"] else "") + " ".join(t for t, _ in ptext_lines)
+        elif mode == "sources":
+            tail = " ".join(t for t, _ in ptext_lines)
+            if tail:
+                res["sources"] = (res["sources"] + "; " + tail) if res["sources"] else tail
+        elif kind == "WN":
+            body_units.append((ptext_lines, None))
+        else:  # AMP
+            if not amp_title:
+                t0 = ptext_lines[0][0]
+                m = re.search(r"Notice\s+of\s+Administrative\s+Monetary\s+Penalty\s+AMP\s*#?\s*(\d*)", t0, re.I)
+                if m:
+                    res["ampnum"] = m.group(1)
+                m = _WN_AMP_REL_RE.search(t0)
+                if m:
+                    res["related_nc"] = m.group(1)
+                t0 = re.split(r"Notice\s+of\s+Administrative\s+Monetary\s+Penalty"
+                              r"|Related\s+to\s+Written\s+Notification", t0, flags=re.I)[0].strip()
+                res["title"] = t0
+                amp_title = True
+                if len(ptext_lines) > 1:
+                    body_units.append((ptext_lines[1:], None))
+            else:
+                body_units.append((ptext_lines, None))
+    # classify WN body units into quoted vs summary
+    quoted, summary = [], []
+    if kind == "WN":
+        parsed = [(_wn_split_unit(u[0]), u[1]) for u in body_units]
+        # a short non-narrative summary-only unit right before a quote unit is
+        # the rule heading (separated by a paragraph break): fold it into the quote
+        for i in range(len(parsed) - 1):
+            (q, s), tag = parsed[i]
+            (nq, ns), ntag = parsed[i+1]
+            if tag is None and not q and s and nq and len(s) == 1 and len(s[0]) < 80 and not _WN_NARR_RE.match(s[0]):
+                parsed[i] = ((q, []), tag)
+                parsed[i+1] = (([s[0]] + nq, ns), ntag)
+        for (q, s), tag in parsed:
+            if tag == "quote":
+                quoted.extend(q + s)
+            else:
+                quoted.extend(q)
+                summary.extend(s)
+    if kind == "WN" and not (res["nc"] or res["statute"] or res["quoted"] or res["summary"]
+                            or res["rationale"] or res["sources"]):
+        return None
+    res["quoted"] = " ".join(quoted).strip()
+    res["summary"] = " ".join(summary).strip()
+    if kind == "AMP" and not res["summary"]:
+        res["summary"] = " ".join(t for u in body_units for t, _ in u[0]).strip()
+    return res
 
 
 def parse_findings(wn_html):
     """Split a report's WN_Details HTML into structured finding/fine records.
 
-    Tags are stripped to plain text BEFORE header detection so tag-split words
-    (e.g. 'WRITT<u>EN</u> NOTIFICATION') are handled. Returns a list of dicts:
-    seq, type (WN|AMP), title, category, nc, statute, fine, source, text,
-    pursuant_to, summary, rationale, sources.
+    Returns one dict per finding:
+        seq, type ('WN' | 'AMP'), title, category, nc, statute, fine,
+        source, text (plain fallback), pursuant_to, summary, rationale,
+        sources, quoted (quoted rule text, 2024+ reports), ampnum
     """
-    wn = _strip_tags(wn_html)
+    lines = _wn_lines(wn_html)
+    flat = " ".join(t for t, _ in lines if t)
+    starts, pos = [], 0  # (flat offset, index into lines)
+    for idx, (t, _) in enumerate(lines):
+        if t:
+            starts.append((pos, idx))
+            pos += len(t) + 1
     markers = [(m.start(), "WN" if m.group(0).upper().startswith("WRITTEN") else "AMP")
-               for m in FINDING_HEAD.finditer(wn)]
-    markers.sort()
+               for m in FINDING_HEAD.finditer(flat)]
+
+    def line_at(off):
+        best = 0
+        for off2, idx in starts:
+            if off2 <= off: best = idx
+            else: break
+        return best
+
     out = []
     for i, (p, kind) in enumerate(markers):
-        end = markers[i + 1][0] if i + 1 < len(markers) else len(wn)
-        block = wn[p:end]
-        # --- NC number (from the header line, not body re-cites) ---
-        ncm = re.search(r"NC\s*#?\s*(\d*)", block)
-        nc = ncm.group(1) if ncm else ""
-        # --- statute (case/colon-insensitive) ---
-        statm = STATUTE_RE.search(block)
-        statute = statm.group(1).strip() if statm else ""
-        # --- fine amount ---
-        finem = re.search(r"\$\s*([\d,]+(?:\.\d+)?)", block)
+        li = line_at(p)
+        le = line_at(markers[i+1][0]) if i+1 < len(markers) else len(lines)
+        if le <= li:
+            continue  # doubled "WRITTEN NOTIFICATION:" header; second marker owns the block
+        r = _wn_parse_block(lines[li:le], kind)
+        if r is None:
+            continue
+        flat_block = " ".join(t for t, _ in lines[li:le])
+        finem = re.search(r"administrative penalty of \$\s*([\d,]+(?:\.\d+)?)", flat_block, re.I)
+        if not finem:
+            finem = re.search(r"\$\s*([\d,]+(?:\.\d+)?)", flat_block)
         fine = float(finem.group(1).replace(",", "")) if finem else 0.0
-        # --- structured fields ---
-        pursuant_to = ""
-        summary = ""
-        rationale = ""
-        sources = ""
-        if kind == "WN":
-            pm = re.search(r"pursuant\s+to\s+(.+?)(?:\s*\d+\s*\.)?\s*(?:Non|The|During)", block, re.I)
-            if pm:
-                pursuant_to = pm.group(1).strip()
-            # summary: text after the statute line, up to Rationale / Sources / end
-            if statm:
-                after = block[statm.end():]
-                sm = re.search(r"(.+?)(?=\s+(?:Rationale|Sources:|$))", after, re.I | re.S)
-                if sm:
-                    summary = sm.group(1).strip()
-            # rationale: between "Rationale and Summary:" / "Rationale:" and "Sources:"
-            rm = re.search(r"Rationale\s+and\s+Summary:?\s*(.+?)\s+Sources:", block, re.I | re.S)
-            if not rm:
-                rm = re.search(r"Rationale:?\s*(.+?)\s+Sources:", block, re.I | re.S)
-            if rm:
-                rationale = rm.group(1).strip()
-            sm2 = re.search(r"Sources?:\s*(.+?)(?:\s+NC\s*#|$)", block, re.I | re.S)
-            if sm2:
-                sources = sm2.group(1).strip()
-        else:  # AMP
-            # summary = the fine rationale (why the fine was issued)
-            rm = re.search(r"Pursuant\s+to\s+section\s+158[^.]*\.\s*(.+?)(?:\s+Compliance\s+History|$)", block, re.I | re.S)
-            if rm:
-                summary = rm.group(1).strip()
-        # --- body text (for the plain-text fallback) ---
-        body = block
-        # drop the header line and NC line from body
-        body = re.sub(r"^WRITTEN\s+NOTIFICATION:?\s*", "", body, flags=re.I)
-        body = re.sub(r"^NOTICE\s+OF\s+ADMINISTRATIVE\s+MONETARY\s+PENALTY[^.]*\.?\s*", "", body, flags=re.I)
-        body = re.sub(r"NC\s*#?\d*\s+Written\s+Notification\s+pursuant[^.]*\.?\s*", "", body, flags=re.I)
-        body = re.sub(r"Non[-\s]?[Cc]ompliance\s+with:?\s*[^.]*\.?\s*", "", body, flags=re.I)
-        body = re.sub(r"Rationale\s+and\s+Summary:?\s*", "", body, flags=re.I)
-        body = re.sub(r"Sources?:\s*", "", body, flags=re.I)
-        body = re.sub(r"\s+", " ", body).strip()
-        title = ""
-        tm = re.search(r"WRITTEN\s+NOTIFICATION:\s*(.+?)(?:\s+NC\s*#|$)", block, re.I)
-        if tm:
-            title = tm.group(1).strip()
-        if not title:
-            tm = re.search(r"NOTICE\s+OF\s+ADMINISTRATIVE\s+MONETARY\s+PENALTY[^:]*:\s*(.+?)(?:\s+NC\s*#|$)", block, re.I)
-            if tm:
-                title = tm.group(1).strip()
+        nc = r["nc"] or r["related_nc"]
+        title = r["title"] or ""
         category = "Administrative Monetary Penalty" if kind == "AMP" else (title or "Written Notification")
-        out.append({"seq": len(out) + 1, "type": kind, "title": title, "category": category,
-                    "nc": nc, "statute": statute, "fine": fine, "source": sources,
-                    "text": body, "pursuant_to": pursuant_to, "summary": summary,
-                    "rationale": rationale, "sources": sources})
+        out.append({"seq": len(out)+1, "type": kind, "title": title, "category": category,
+                    "nc": nc, "statute": r["statute"], "fine": fine,
+                    "source": r["sources"],
+                    "text": " ".join(b for b in (r["summary"], r["quoted"], r["rationale"]) if b).strip(),
+                    "pursuant_to": r["pursuant_to"], "summary": r["summary"],
+                    "rationale": r["rationale"], "sources": r["sources"],
+                    "quoted": r["quoted"], "ampnum": r["ampnum"]})
     return out
 
 
@@ -232,7 +482,7 @@ def db():
     """)
     # migrate: add structured columns if missing (idempotent)
     have = {r[1] for r in c.execute("PRAGMA table_info(findings)")}
-    for col in ("pursuant_to", "summary", "rationale", "sources"):
+    for col in ("pursuant_to", "summary", "rationale", "sources", "quoted", "ampnum"):
         if col not in have:
             c.execute("ALTER TABLE findings ADD COLUMN %s TEXT" % col)
     return c
@@ -276,12 +526,13 @@ def store_detail(c, inspection_id, home_number, raw, parsed):
     c.execute("DELETE FROM findings WHERE inspection_id=?", (inspection_id,))
     for f in parsed["findings"]:
         c.execute("INSERT INTO findings(finding_id,inspection_id,home_number,seq,type,category,"
-                  "title,nc,statute,fine,source,text,pursuant_to,summary,rationale,sources) "
-                  "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  "title,nc,statute,fine,source,text,pursuant_to,summary,rationale,sources,"
+                  "quoted,ampnum) "
+                  "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                   ("%s:%d" % (inspection_id, f["seq"]), inspection_id, str(home_number),
                    f["seq"], f["type"], f["category"], f["title"], f["nc"], f["statute"],
                    f["fine"], f["source"], f["text"], f.get("pursuant_to"), f.get("summary"),
-                   f.get("rationale"), f.get("sources")))
+                   f.get("rationale"), f.get("sources"), f.get("quoted"), f.get("ampnum")))
 
 
 # ---------------------------------------------------------------- commands
@@ -663,6 +914,8 @@ def _finding_card(f, hn):
     pills = []
     if is_amp:
         pills.append("<span class='pill pill-fine'>Fine \u2013 AMP</span>")
+        if f.get("ampnum"):
+            pills.append("<span class='pill pill-nc'>AMP#%s</span>" % esc(f["ampnum"]))
         if f.get("fine"):
             pills.append("<span class='pill pill-fine'>$%s</span>" % format(int(f["fine"]), ","))
     else:
@@ -676,6 +929,9 @@ def _finding_card(f, hn):
     if not is_amp and f.get("statute"):
         parts.append("<div class='crule'><span class='crlabel'>Rule cited</span>"
                      "<div class='crtext'>%s</div></div>" % esc(f["statute"]))
+    if not is_amp and f.get("quoted"):
+        parts.append("<div class='cquote'><span class='crlabel'>Rule text</span>"
+                     "<div class='cquotetext'>%s</div></div>" % esc(f["quoted"]))
     if f.get("summary"):
         parts.append("<div class='csummary'>%s</div>" % esc(f["summary"]))
     if f.get("rationale"):
@@ -723,6 +979,7 @@ def render_home_dashboard(home, insp, findings):
                       "title": f["title"], "num": f["inspection_number"],
                       "pursuant": f.get("pursuant_to"), "summary": f.get("summary"),
                       "rationale": f.get("rationale"), "sources": f.get("sources"),
+                      "quoted": f.get("quoted"), "ampnum": f.get("ampnum"),
                       "url": REPORT_URL.format(iid=f["inspection_id"], hn=hn)})
         if date != cur:
             if cur is not None:
@@ -785,6 +1042,8 @@ select{font-size:13px;padding:4px 8px;border:1px solid var(--line);border-radius
 .crule{background:#f7f8fb;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:8px 0}
 .crlabel{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);display:block;margin-bottom:2px}
 .crtext{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;color:var(--ink)}
+.cquote{background:#f6f8fb;border:1px solid var(--line);border-left:3px solid #c9d4e8;border-radius:8px;padding:8px 10px;margin:8px 0}
+.cquotetext{font-size:13px;color:#3d4657;line-height:1.45;font-style:italic}
 .csummary{font-size:14px;margin:8px 0}
 .crationale{font-size:13px;color:#454a55;margin:6px 0}
 .csources{font-size:12px;color:var(--muted);margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)}
@@ -841,11 +1100,12 @@ window.YEARS = @@YEARS_JSON@@;
   function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
   function card(f){
     var pills='';
-    if(f.t==='AMP'){pills+="<span class='pill pill-fine'>Fine \u2013 AMP</span>"; if(f.fine)pills+="<span class='pill pill-fine'>$"+Math.round(f.fine).toLocaleString()+"</span>";}
+    if(f.t==='AMP'){pills+="<span class='pill pill-fine'>Fine \u2013 AMP</span>"; if(f.ampnum)pills+="<span class='pill pill-nc'>AMP#"+esc(f.ampnum)+"</span>"; if(f.fine)pills+="<span class='pill pill-fine'>$"+Math.round(f.fine).toLocaleString()+"</span>";}
     else{pills+="<span class='pill pill-wn'>Written notification</span>"; if(f.nc)pills+="<span class='pill pill-nc'>NC#"+esc(f.nc)+"</span>";}
     var h="<div class='fcard'><div class='cpills'>"+pills+"</div>";
     if(f.title)h+="<div class='ctopic'>"+esc(f.title)+"</div>";
     if(f.t!=='AMP'&&f.s)h+="<div class='crule'><span class='crlabel'>Rule cited</span><div class='crtext'>"+esc(f.s)+"</div></div>";
+    if(f.t!=='AMP'&&f.quoted)h+="<div class='cquote'><span class='crlabel'>Rule text</span><div class='cquotetext'>"+esc(f.quoted)+"</div></div>";
     if(f.summary)h+="<div class='csummary'>"+esc(f.summary)+"</div>";
     if(f.rationale)h+="<div class='crationale'>"+esc(f.rationale)+"</div>";
     if(f.sources)h+="<div class='csources'>Sources: "+esc(f.sources)+"</div>";
@@ -945,13 +1205,13 @@ def cmd_report(args):
         w = csv.writer(f)
         w.writerow(["home_number", "home", "date_issued", "inspection_number", "type",
                     "category", "nc", "statute", "fine", "source", "text",
-                    "pursuant_to", "summary", "rationale", "sources"])
+                    "pursuant_to", "summary", "rationale", "sources", "quoted", "ampnum"])
         for fnd in findings:
             w.writerow([fnd["home_number"], fnd["home_name"], fnd["date_issued"],
                         fnd["inspection_number"], fnd["type"], fnd["category"], fnd["nc"],
                         fnd["statute"], fnd["fine"], fnd["source"], fnd["text"],
                         fnd.get("pursuant_to"), fnd.get("summary"), fnd.get("rationale"),
-                        fnd.get("sources")])
+                        fnd.get("sources"), fnd.get("quoted"), fnd.get("ampnum")])
 
     # CSV: home x year matrix
     by = defaultdict(lambda: dict(wn=0, amp=0.0, insp=0, byyear={}))
