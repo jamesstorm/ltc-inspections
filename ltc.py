@@ -689,6 +689,9 @@ h2{font-size:16px;margin:0 0 10px}
 .mixfill{background:var(--accent);height:14px;border-radius:4px;min-width:2px}
 .mixval{width:24px;text-align:right;font-variant-numeric:tabular-nums;font-size:13px}
 select{font-size:13px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:#fff}
+.toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:10px 0 12px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 14px}
+.toolbar label{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.toolbar input[type=checkbox]{font-size:13px;padding:4px 6px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink)}
 .report{background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 16px;margin-bottom:12px}
 .rhead{font-weight:600;margin-bottom:8px}
 .finding{border-left:3px solid var(--find);padding:6px 0 6px 12px;margin:8px 0}
@@ -728,6 +731,10 @@ footer{margin-top:32px;padding-top:16px;border-top:1px solid var(--line);font-si
 <section>
 <h2>All findings</h2>
 <div class="note">Grouped by report (newest first). Fines are shown with their amount and rationale. Each report links to the Ministry's source page.</div>
+<div class="toolbar">
+<label><input type="checkbox" id="fines-only"> Fines only</label>
+<span class="note" id="fines-count"></span>
+</div>
 @@LISTING@@
 </section>
 
@@ -758,6 +765,33 @@ window.YEARS = @@YEARS_JSON@@;
   }
   el.addEventListener('change',mix);
   mix();
+})();
+(function(){
+  var cb=document.getElementById('fines-only'), count=document.getElementById('fines-count');
+  var reports=[].slice.call(document.querySelectorAll('.report'));
+  function rpYear(rp){
+    var m=(rp.querySelector('.rhead')||{}).textContent||'';
+    var y=m.match(/(\\d{4})/); return y?y[1]:'';
+  }
+  function apply(){
+    var yearSel=document.getElementById('mix-year');
+    var on=cb.checked, y=yearSel?yearSel.value:'', shown=0, total=0;
+    reports.forEach(function(rp){
+      var finds=[].slice.call(rp.querySelectorAll('.finding')), vis=0;
+      finds.forEach(function(fd){
+        var isFine=!!fd.querySelector('.badge.amp');
+        total++;
+        if((!on||isFine)&&(!y||rpYear(rp)===y)){fd.style.display='';vis++;shown++;}else{fd.style.display='none';}
+      });
+      rp.style.display=vis?'':'none';
+    });
+    if(on&&shown===0){count.textContent='No fines on record.';}
+    else{count.textContent=shown+' of '+total+' finding(s) shown';}
+  }
+  cb.addEventListener('change',apply);
+  var yearSel=document.getElementById('mix-year');
+  if(yearSel){yearSel.addEventListener('change',apply);}
+  apply();
 })();
 </script>
 </body></html>
