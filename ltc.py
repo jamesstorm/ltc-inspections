@@ -426,14 +426,6 @@ def render_dashboard(homes, insp, findings, region_label):
     homes_json = json.dumps(homes_data, ensure_ascii=False)
     years_json = json.dumps(year_set)
 
-    # findings by area (finding category) across all homes
-    cat = Counter(f["category"] for f in findings if f["type"] == "WN")
-    cmax = max(cat.values()) if cat else 1
-    area_rows = "".join(
-        "<div class='arow'><div class='albl'>%s</div><div class='atrk'><div class='abar' "
-        "style='width:%d%%'></div></div><div class='aval'>%d</div>"
-        % (esc(name), int(100 * n / cmax), n) for name, n in cat.most_common(14))
-
     # default server-rendered table rows (total findings desc) for no-JS fallback
     rows_html = "".join(
         "<tr data-hn='%s'><td class='name'><a href='%s'>%s</a><div class='sub'>%s</div></td>"
@@ -518,12 +510,6 @@ details.method p, details.method li{font-size:13px;color:#333}
 <div class="note">Click a column to sort. “Findings” sums written-notification findings across the selected year range. “Fines” = administrative monetary penalties. “CO-rel” = findings that reference a compliance order. Click a home name for its dashboard.</div>
 </section>
 
-<section>
-<h2>Findings by type</h2>
-<div class="note">Finding categories most cited across all homes in this window.</div>
-@@AREAS@@
-</section>
-
 <details class="method">
 <summary>Methodology & data sources</summary>
 <p><b>Data source.</b> Every figure comes from the Ontario Ministry of Long-Term Care's public inspection
@@ -606,7 +592,6 @@ window.YEARS = @@YEARS_JSON@@;
         "@@CITY_OPTS@@": city_opts,
         "@@YEAR_OPTS@@": year_opts_all,
         "@@ROWS@@": rows_html,
-        "@@AREAS@@": area_rows,
         "@@HOMES_JSON@@": homes_json,
         "@@YEARS_JSON@@": years_json,
     }
