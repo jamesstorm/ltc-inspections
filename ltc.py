@@ -96,65 +96,101 @@ def clean(t):
     return t.strip()
 
 
-FINDING_HEAD = re.compile(r"WRITTEN NOTIFICATION|NOTICE OF ADMINISTRATIVE MONETARY PENALTY")
+FINDING_HEAD = re.compile(
+    r"WRITTEN\s+NOTIFICATION:|NOTICE\s+OF\s+ADMINISTRATIVE\s+MONETARY\s+PENALTY\s*\(AMP\)", re.I)
+# "Non-compliance with: FLTCA, 2021, s. 6(1)(c)"  OR  "Non-Compliance with FLTCA, 2021, s. 184(3)"
+STATUTE_RE = re.compile(
+    r"Non[-\s]?[Cc]ompliance\s+with:?\s*(.+?)(?=\s+(?:The\s+licensee|During|Rationale|Sources|NC\s*#|$))",
+    re.I)
+
+
+def _strip_tags(s):
+    """Strip HTML to plain text. Block-level tags become a space (so words
+    don't merge across blocks); inline tags are removed entirely (so a
+    mid-word tag like WRITT<u>EN</u> merges back to WRITTEN)."""
+    s = re.sub(r"<(br|/p|/li|/div|/h\d|/span|/strong|/ul|/tr|/td)[^>]*>", " ", s or "", flags=re.I)
+    s = re.sub(r"<[^>]+>", "", s)
+    s = _h.unescape(s)
+    return re.sub(r"\s+", " ", s).strip()
 
 
 def parse_findings(wn_html):
     """Split a report's WN_Details HTML into structured finding/fine records.
 
-    Handles both known markup eras (h2 headers and strong headers).
-    Returns a list of dicts: seq, type (WN|AMP), title, category, nc,
-    statute, fine, source, text.
+    Tags are stripped to plain text BEFORE header detection so tag-split words
+    (e.g. 'WRITT<u>EN</u> NOTIFICATION') are handled. Returns a list of dicts:
+    seq, type (WN|AMP), title, category, nc, statute, fine, source, text,
+    pursuant_to, summary, rationale, sources.
     """
-    wn = wn_html or ""
-    markers = [(m.start(), "WN" if m.group(0) == "WRITTEN NOTIFICATION" else "AMP")
+    wn = _strip_tags(wn_html)
+    markers = [(m.start(), "WN" if m.group(0).upper().startswith("WRITTEN") else "AMP")
                for m in FINDING_HEAD.finditer(wn)]
     markers.sort()
     out = []
     for i, (p, kind) in enumerate(markers):
         end = markers[i + 1][0] if i + 1 < len(markers) else len(wn)
-        block = wn[wn.rfind("<", 0, p):end]
-        ncm = re.search(r"NC\s*#\s*(\d*)", block)
+        block = wn[p:end]
+        # --- NC number (from the header line, not body re-cites) ---
+        ncm = re.search(r"NC\s*#?\s*(\d*)", block)
         nc = ncm.group(1) if ncm else ""
-        statm = re.search(r"Non-compliance with:\s*([^<]+?)\s*(?:</|<)", block, re.I)
-        statute = clean(statm.group(1)).strip() if statm else ""
+        # --- statute (case/colon-insensitive) ---
+        statm = STATUTE_RE.search(block)
+        statute = statm.group(1).strip() if statm else ""
+        # --- fine amount ---
         finem = re.search(r"\$\s*([\d,]+(?:\.\d+)?)", block)
         fine = float(finem.group(1).replace(",", "")) if finem else 0.0
-        srcre = re.search(r"Sources?:\s*(.+?)(?:<br|<br/>|$)", block, re.I | re.S)
-        source = clean(srcre.group(1)).strip() if srcre else ""
-        plain = clean(block)
-        lines = [l.strip() for l in plain.split("\n") if l.strip()]
-        body, skip = [], False
-        for l in lines:
-            if kind == "WN" and l.lower().startswith("written notification:"):
-                continue
-            if kind == "AMP" and l.lower().startswith("notice of administrative monetary penalty"):
-                continue
-            if re.match(r"^NC\s*#?\d*\s", l, re.I):
-                continue
-            if re.match(r"^(Written|Compliance)\s+Notification\s+pursuant", l, re.I):
-                continue
-            if l.lower().startswith("non-compliance with:"):
-                continue
-            if re.match(r"^(s\.\s*\d|O\.\s*Reg\.|Pursuant to)", l, re.I):
-                continue
-            if re.match(r"^(Related to Written Notification|Compliance History|Invoice with payment|"
-                        r"Licensees must not pay|In accordance with s\.\s*349|This is the first AMP|"
-                        r"The administrative penalty)", l, re.I):
-                continue
-            if re.match(r"^Sources?:\s", l, re.I):
-                skip = True
-                continue
-            if skip:
-                continue
-            body.append(l)
-        title = lines[0] if lines else ""
-        if title.lower().startswith("written notification:"):
-            title = title.split(":", 1)[1].strip()
+        # --- structured fields ---
+        pursuant_to = ""
+        summary = ""
+        rationale = ""
+        sources = ""
+        if kind == "WN":
+            pm = re.search(r"pursuant\s+to\s+(.+?)(?:\s*\d+\s*\.)?\s*(?:Non|The|During)", block, re.I)
+            if pm:
+                pursuant_to = pm.group(1).strip()
+            # summary: text after the statute line, up to Rationale / Sources / end
+            if statm:
+                after = block[statm.end():]
+                sm = re.search(r"(.+?)(?=\s+(?:Rationale|Sources:|$))", after, re.I | re.S)
+                if sm:
+                    summary = sm.group(1).strip()
+            # rationale: between "Rationale and Summary:" / "Rationale:" and "Sources:"
+            rm = re.search(r"Rationale\s+and\s+Summary:?\s*(.+?)\s+Sources:", block, re.I | re.S)
+            if not rm:
+                rm = re.search(r"Rationale:?\s*(.+?)\s+Sources:", block, re.I | re.S)
+            if rm:
+                rationale = rm.group(1).strip()
+            sm2 = re.search(r"Sources?:\s*(.+?)(?:\s+NC\s*#|$)", block, re.I | re.S)
+            if sm2:
+                sources = sm2.group(1).strip()
+        else:  # AMP
+            # summary = the fine rationale (why the fine was issued)
+            rm = re.search(r"Pursuant\s+to\s+section\s+158[^.]*\.\s*(.+?)(?:\s+Compliance\s+History|$)", block, re.I | re.S)
+            if rm:
+                summary = rm.group(1).strip()
+        # --- body text (for the plain-text fallback) ---
+        body = block
+        # drop the header line and NC line from body
+        body = re.sub(r"^WRITTEN\s+NOTIFICATION:?\s*", "", body, flags=re.I)
+        body = re.sub(r"^NOTICE\s+OF\s+ADMINISTRATIVE\s+MONETARY\s+PENALTY[^.]*\.?\s*", "", body, flags=re.I)
+        body = re.sub(r"NC\s*#?\d*\s+Written\s+Notification\s+pursuant[^.]*\.?\s*", "", body, flags=re.I)
+        body = re.sub(r"Non[-\s]?[Cc]ompliance\s+with:?\s*[^.]*\.?\s*", "", body, flags=re.I)
+        body = re.sub(r"Rationale\s+and\s+Summary:?\s*", "", body, flags=re.I)
+        body = re.sub(r"Sources?:\s*", "", body, flags=re.I)
+        body = re.sub(r"\s+", " ", body).strip()
+        title = ""
+        tm = re.search(r"WRITTEN\s+NOTIFICATION:\s*(.+?)(?:\s+NC\s*#|$)", block, re.I)
+        if tm:
+            title = tm.group(1).strip()
+        if not title:
+            tm = re.search(r"NOTICE\s+OF\s+ADMINISTRATIVE\s+MONETARY\s+PENALTY[^:]*:\s*(.+?)(?:\s+NC\s*#|$)", block, re.I)
+            if tm:
+                title = tm.group(1).strip()
         category = "Administrative Monetary Penalty" if kind == "AMP" else (title or "Written Notification")
         out.append({"seq": len(out) + 1, "type": kind, "title": title, "category": category,
-                    "nc": nc, "statute": statute, "fine": fine, "source": source,
-                    "text": " ".join(body).strip()})
+                    "nc": nc, "statute": statute, "fine": fine, "source": sources,
+                    "text": body, "pursuant_to": pursuant_to, "summary": summary,
+                    "rationale": rationale, "sources": sources})
     return out
 
 
@@ -190,10 +226,15 @@ def db():
     CREATE TABLE IF NOT EXISTS findings(
         finding_id TEXT PRIMARY KEY, inspection_id TEXT, home_number TEXT, seq INT,
         type TEXT, category TEXT, title TEXT, nc TEXT, statute TEXT, fine REAL,
-        source TEXT, text TEXT);
+        source TEXT, text TEXT, pursuant_to TEXT, summary TEXT, rationale TEXT, sources TEXT);
     CREATE INDEX IF NOT EXISTS ix_findings_home ON findings(home_number);
     CREATE INDEX IF NOT EXISTS ix_findings_insp ON findings(inspection_id);
     """)
+    # migrate: add structured columns if missing (idempotent)
+    have = {r[1] for r in c.execute("PRAGMA table_info(findings)")}
+    for col in ("pursuant_to", "summary", "rationale", "sources"):
+        if col not in have:
+            c.execute("ALTER TABLE findings ADD COLUMN %s TEXT" % col)
     return c
 
 
@@ -235,10 +276,12 @@ def store_detail(c, inspection_id, home_number, raw, parsed):
     c.execute("DELETE FROM findings WHERE inspection_id=?", (inspection_id,))
     for f in parsed["findings"]:
         c.execute("INSERT INTO findings(finding_id,inspection_id,home_number,seq,type,category,"
-                  "title,nc,statute,fine,source,text) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                  "title,nc,statute,fine,source,text,pursuant_to,summary,rationale,sources) "
+                  "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                   ("%s:%d" % (inspection_id, f["seq"]), inspection_id, str(home_number),
                    f["seq"], f["type"], f["category"], f["title"], f["nc"], f["statute"],
-                   f["fine"], f["source"], f["text"]))
+                   f["fine"], f["source"], f["text"], f.get("pursuant_to"), f.get("summary"),
+                   f.get("rationale"), f.get("sources")))
 
 
 # ---------------------------------------------------------------- commands
@@ -325,9 +368,19 @@ def cmd_reparse(args):
     c = db()
     rows = c.execute("SELECT inspection_id, home_number, raw FROM inspections WHERE fetched_at IS NOT NULL").fetchall()
     city_map, lic_map = {}, {}
+    before = dict(c.execute("SELECT inspection_id, COUNT(*) FROM findings GROUP BY inspection_id").fetchall())
+    changed = 0
+    total_after = 0
     for iid, hn, raw in rows:
         det = json.loads(raw)
-        store_detail(c, iid, hn, raw, parse_detail(det))
+        if isinstance(det, str):  # tolerate double-encoded raw
+            det = json.loads(det)
+        parsed = parse_detail(det)
+        store_detail(c, iid, hn, det, parsed)
+        n_after = len(parsed["findings"])
+        total_after += n_after
+        if before.get(iid, 0) != n_after:
+            changed += 1
         if det.get("Home_City__c"):
             city_map[hn] = det["Home_City__c"]
         if det.get("Licensee__c"):
@@ -338,8 +391,10 @@ def cmd_reparse(args):
     for hn, v in lic_map.items():
         c.execute("UPDATE homes SET licensee=? WHERE home_number=?", (v, hn))
     c.commit()
-    n = c.execute("SELECT COUNT(*) FROM findings WHERE type='WN'").fetchone()[0]
-    print("Re-parsed %d reports -> %d findings" % (len(rows), n))
+    n_wn = c.execute("SELECT COUNT(*) FROM findings WHERE type='WN'").fetchone()[0]
+    n_amp = c.execute("SELECT COUNT(*) FROM findings WHERE type='AMP'").fetchone()[0]
+    print("Re-parsed %d reports -> %d findings (%d WN + %d AMP)" % (len(rows), n_wn + n_amp, n_wn, n_amp))
+    print("Reports whose finding count changed: %d" % changed)
 
 
 def cmd_status(args):
@@ -601,6 +656,36 @@ window.YEARS = @@YEARS_JSON@@;
 
 
 # ---------------------------------------------------------------- per-home dashboard
+def _finding_card(f, hn):
+    """Render one finding as a structured card (server-side, no-JS fallback)."""
+    url = REPORT_URL.format(iid=f["inspection_id"], hn=hn)
+    is_amp = f["type"] == "AMP"
+    pills = []
+    if is_amp:
+        pills.append("<span class='pill pill-fine'>Fine \u2013 AMP</span>")
+        if f.get("fine"):
+            pills.append("<span class='pill pill-fine'>$%s</span>" % format(int(f["fine"]), ","))
+    else:
+        pills.append("<span class='pill pill-wn'>Written notification</span>")
+        if f.get("nc"):
+            pills.append("<span class='pill pill-nc'>NC#%s</span>" % esc(f["nc"]))
+    topic = esc(f.get("title") or f.get("category") or "")
+    parts = ["<div class='fcard'><div class='cpills'>%s</div>" % "".join(pills)]
+    if topic:
+        parts.append("<div class='ctopic'>%s</div>" % topic)
+    if not is_amp and f.get("statute"):
+        parts.append("<div class='crule'><span class='crlabel'>Rule cited</span>"
+                     "<div class='crtext'>%s</div></div>" % esc(f["statute"]))
+    if f.get("summary"):
+        parts.append("<div class='csummary'>%s</div>" % esc(f["summary"]))
+    if f.get("rationale"):
+        parts.append("<div class='crationale'>%s</div>" % esc(f["rationale"]))
+    if f.get("sources"):
+        parts.append("<div class='csources'>Sources: %s</div>" % esc(f["sources"]))
+    parts.append("</div>")
+    return "".join(parts)
+
+
 def render_home_dashboard(home, insp, findings):
     hn = home["home_number"]
     years = sorted({ (r["date_issued"] or "")[:4] for r in insp if r.get("date_issued") })
@@ -636,22 +721,17 @@ def render_home_dashboard(home, insp, findings):
                       "s": f["statute"], "fine": f["fine"] or 0, "date": date,
                       "nc": f["nc"], "src": f["source"], "text": f["text"],
                       "title": f["title"], "num": f["inspection_number"],
+                      "pursuant": f.get("pursuant_to"), "summary": f.get("summary"),
+                      "rationale": f.get("rationale"), "sources": f.get("sources"),
                       "url": REPORT_URL.format(iid=f["inspection_id"], hn=hn)})
         if date != cur:
             if cur is not None:
                 listing.append("</div>")
             cur = date
-            listing.append("<div class='report'><div class='rhead'><a href='%s'>%s</a> · %s · %d finding(s)</div>"
+            listing.append("<div class='report'><div class='rhead'><a href='%s'>%s</a> \u00b7 %s \u00b7 %d finding(s)</div>"
                            % (esc(REPORT_URL.format(iid=f["inspection_id"], hn=hn)), esc(date),
                               esc(f["inspection_number"]), date_count.get(date, 0)))
-        fine_badge = ("<span class='badge fine'>$%.0f</span>" % f["fine"]) if f["fine"] else ""
-        type_badge = "<span class='badge amp'>FINE</span>" if f["type"] == "AMP" else "<span class='badge wn'>FINDING</span>"
-        listing.append(
-            "<div class='finding'><div class='fmeta'>%s %s "
-            "<span class='statute'>%s</span></div><div class='ftext'>%s</div>"
-            "<div class='fsrc'>Sources: %s</div></div>"
-            % (type_badge, fine_badge, esc(f["category"]), esc(f["text"] or f["title"]),
-               esc(f["source"] or "\u2014")))
+        listing.append(_finding_card(f, hn))
     if cur is not None:
         listing.append("</div>")
     listing_html = "".join(listing) if listing else "<p class='note'>No findings recorded.</p>"
@@ -662,7 +742,7 @@ def render_home_dashboard(home, insp, findings):
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='18' fill='%232563eb'/%3E%3Cpath d='M50 30v40M30 50h40' stroke='%23fff' stroke-width='13' stroke-linecap='round'/%3E%3C/svg%3E">
-<title>@@NAME@@ — Inspection History</title>
+<title>@@NAME@@ \u2014 Inspection History</title>
 <style>
 :root{--ink:#1a1c24;--muted:#6b7280;--line:#e6e8ee;--find:#e0552b;--bg:#f6f7fa;--accent:#2f6df6}
 *{box-sizing:border-box}
@@ -694,11 +774,20 @@ h2{font-size:16px;margin:0 0 10px}
 select{font-size:13px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:#fff}
 .report{background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 16px;margin-bottom:12px}
 .rhead{font-weight:600;margin-bottom:8px}
-.finding{border-left:3px solid var(--find);padding:6px 0 6px 12px;margin:8px 0}
-.finding .fmeta{font-size:13px;margin-bottom:4px}
-.statute{color:var(--muted);font-size:12px}
-.ftext{font-size:14px}
-.fsrc{font-size:12px;color:var(--muted);margin-top:4px}
+/* finding cards */
+.fcard{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:10px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.cpills{margin-bottom:8px}
+.pill{display:inline-block;font-size:11px;font-weight:700;padding:2px 9px;border-radius:12px;margin-right:6px;vertical-align:middle}
+.pill-wn{background:#eef3ff;color:#2f6df6}
+.pill-nc{background:#eef0f4;color:#6b7280}
+.pill-fine{background:#fef3f0;color:#e0552b}
+.ctopic{font-size:17px;font-weight:700;margin:2px 0 8px}
+.crule{background:#f7f8fb;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:8px 0}
+.crlabel{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);display:block;margin-bottom:2px}
+.crtext{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;color:var(--ink)}
+.csummary{font-size:14px;margin:8px 0}
+.crationale{font-size:13px;color:#454a55;margin:6px 0}
+.csources{font-size:12px;color:var(--muted);margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)}
 .badge{display:inline-block;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;margin-right:6px;vertical-align:middle}
 .badge.amp{background:#fff0f0;color:var(--find)}
 .badge.wn{background:#eef2ff;color:#3a4ea8}
@@ -739,7 +828,7 @@ footer{margin-top:32px;padding-top:16px;border-top:1px solid var(--line);font-si
 </section>
 
 <footer>Data: publicreports.mltc.gov.on.ca. Findings are as issued by the Ministry, not their resolved status.
-Generated by ltc.py — open-source tool. <a href="index.html">Back to all homes</a>.</footer>
+Generated by ltc.py \u2014 open-source tool. <a href="index.html">Back to all homes</a>.</footer>
 </div>
 <script>
 window.FINDINGS = @@FINDINGS_JSON@@;
@@ -750,25 +839,34 @@ window.YEARS = @@YEARS_JSON@@;
   var listing=document.getElementById('listing');
   var fcount=document.getElementById('fines-count');
   function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+  function card(f){
+    var pills='';
+    if(f.t==='AMP'){pills+="<span class='pill pill-fine'>Fine \u2013 AMP</span>"; if(f.fine)pills+="<span class='pill pill-fine'>$"+Math.round(f.fine).toLocaleString()+"</span>";}
+    else{pills+="<span class='pill pill-wn'>Written notification</span>"; if(f.nc)pills+="<span class='pill pill-nc'>NC#"+esc(f.nc)+"</span>";}
+    var h="<div class='fcard'><div class='cpills'>"+pills+"</div>";
+    if(f.title)h+="<div class='ctopic'>"+esc(f.title)+"</div>";
+    if(f.t!=='AMP'&&f.s)h+="<div class='crule'><span class='crlabel'>Rule cited</span><div class='crtext'>"+esc(f.s)+"</div></div>";
+    if(f.summary)h+="<div class='csummary'>"+esc(f.summary)+"</div>";
+    if(f.rationale)h+="<div class='crationale'>"+esc(f.rationale)+"</div>";
+    if(f.sources)h+="<div class='csources'>Sources: "+esc(f.sources)+"</div>";
+    return h+"</div>";
+  }
   function mix(){
     var y=el.value, c={}, tot=0;
     window.FINDINGS.forEach(function(f){ if(f.t!=='WN')return; if(y&&f.y!==y)return; c[f.c]=(c[f.c]||0)+1; tot++; });
     var items=Object.keys(c).map(function(k){return {k:k,v:c[k]};}).sort(function(a,b){return b.v-a.v;});
     var mx=items.length?items[0].v:1;
     if(!items.length){el.parentElement.innerHTML='<div class="note">No findings in this range.</div>';return;}
-    var html='<select id="mix-year2" style="display:none"></select>';
-    var out='<div style="display:none"></div>';
+    var out='';
     items.forEach(function(it){ out+="<div class='mixbar'><div class='mixlbl' title='"+it.k.replace(/'/g,"\\'")+"'>"+it.k+
       "</div><div class='mixtrk'><div class='mixfill' style='width:"+Math.round(100*it.v/mx)+"%'></div></div>"+
       "<div class='mixval'>"+it.v+"</div></div>"; });
     out+="<div class='note'>"+tot+" finding(s) shown. Share of total per category.</div>";
-    var box=document.getElementById('mix');
-    box.innerHTML=out;
+    document.getElementById('mix').innerHTML=out;
   }
   function renderListing(){
     var y=el.value, only=fo.checked;
     var rows=window.FINDINGS.filter(function(f){ if(only&&f.t!=='AMP')return false; if(y&&f.y!==y)return false; return true; });
-    var nAmp=window.FINDINGS.filter(function(f){return f.t==='AMP'&&(!y||f.y===y);}).length;
     fcount.textContent=only?('('+rows.length+' fine'+(rows.length===1?'':'s')+')'):'';
     if(only&&!rows.length){ listing.innerHTML='<p class="note">No fines on record'+(y?' for '+esc(y):'')+'.</p>'; return; }
     var byDate={}, order=[];
@@ -777,13 +875,8 @@ window.YEARS = @@YEARS_JSON@@;
     var out='';
     order.forEach(function(d){
       var g=byDate[d];
-      out+="<div class='report'><div class='rhead'><a href='"+esc(g[0].url)+"'>"+esc(d)+"</a> · "+esc(g[0].num)+" · "+g.length+" finding(s)</div>";
-      g.forEach(function(f){
-        var badge=(f.t==='AMP')?"<span class='badge amp'>FINE</span>":"<span class='badge wn'>FINDING</span>";
-        var fine=(f.fine)?"<span class='badge fine'>$"+Math.round(f.fine)+"</span>":"";
-        out+="<div class='finding'><div class='fmeta'>"+badge+fine+" <span class='statute'>"+esc(f.c)+"</span></div>"+
-             "<div class='ftext'>"+esc(f.text||f.title)+"</div><div class='fsrc'>Sources: "+esc(f.src||"—")+"</div></div>";
-      });
+      out+="<div class='report'><div class='rhead'><a href='"+esc(g[0].url)+"'>"+esc(d)+"</a> \u00b7 "+esc(g[0].num)+" \u00b7 "+g.length+" finding(s)</div>";
+      g.forEach(function(f){ out+=card(f); });
       out+="</div>";
     });
     listing.innerHTML=out||'<p class="note">No findings recorded.</p>';
@@ -851,11 +944,14 @@ def cmd_report(args):
     with open(str(out / "findings.csv"), "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["home_number", "home", "date_issued", "inspection_number", "type",
-                    "category", "nc", "statute", "fine", "source", "text"])
+                    "category", "nc", "statute", "fine", "source", "text",
+                    "pursuant_to", "summary", "rationale", "sources"])
         for fnd in findings:
             w.writerow([fnd["home_number"], fnd["home_name"], fnd["date_issued"],
                         fnd["inspection_number"], fnd["type"], fnd["category"], fnd["nc"],
-                        fnd["statute"], fnd["fine"], fnd["source"], fnd["text"]])
+                        fnd["statute"], fnd["fine"], fnd["source"], fnd["text"],
+                        fnd.get("pursuant_to"), fnd.get("summary"), fnd.get("rationale"),
+                        fnd.get("sources")])
 
     # CSV: home x year matrix
     by = defaultdict(lambda: dict(wn=0, amp=0.0, insp=0, byyear={}))
