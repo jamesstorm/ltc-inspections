@@ -725,7 +725,8 @@ def render_dashboard(homes, insp, findings, region_label):
         homes_data.append({
             "hn": hn, "name": home_name.get(hn, hn), "city": home_city.get(hn, ""),
             "region": city_region.get(home_city.get(hn, ""), "Other"),
-            "licensee": home_lic.get(hn, ""), "url": HOME_URL.format(hn=hn),
+            "licensee": home_lic.get(hn, ""), "lic": home_lic.get(hn, ""),
+            "url": HOME_URL.format(hn=hn),
             "page": home_file(hn), "byyear": b["byyear"], "amp": round(b["amp"], 2),
             "co": b["co"], "insp": b["insp"], "last": b["last"] or "",
         })
@@ -800,6 +801,7 @@ details.method p, details.method li{font-size:13px;color:#333}
 <div class="toolbar">
 <label>Region <select id="f-region"><option value="">All</option>@@REGION_OPTS@@</select></label>
 <label>City <select id="f-city"><option value="">All</option>@@CITY_OPTS@@</select></label>
+<label>Licensee <select id="f-licensee"><option value="">All</option>@@LICENSEE_OPTS@@</select></label>
 <label>Years <select id="f-from">@@YEAR_OPTS@@</select> to <select id="f-to">@@YEAR_OPTS@@</select></label>
 <label><input type="checkbox" id="f-fines"> Fines only</label>
 <span class="note" id="f-count"></span>
@@ -853,13 +855,13 @@ window.YEARS = @@YEARS_JSON@@;
   function fromV(){var e=document.getElementById('f-from');return e.value||0;}
   function toV(){var e=document.getElementById('f-to');return e.value||9999;}
   function render(){
-    var region=document.getElementById('f-region').value, city=document.getElementById('f-city').value, fines=document.getElementById('f-fines').checked;
+    var region=document.getElementById('f-region').value, city=document.getElementById('f-city').value, lic=document.getElementById('f-licensee').value, fines=document.getElementById('f-fines').checked;
     var tb=document.querySelector('#tbl tbody'), out=[], shown=0;
     var list=window.HOMES.slice().sort(function(a,b){var x=val(a,sortKey),y=val(b,sortKey);
       if(typeof x==='string'){x=String(x).toLowerCase();y=String(y).toLowerCase();}
       return (x<y?-1:x>y?1:0)*sortDir;});
     list.forEach(function(h){
-      if(region&&h.region!==region)return; if(city&&h.city!==city)return; if(fines&&!(h.amp>0))return;
+      if(region&&h.region!==region)return; if(city&&h.city!==city)return; if(lic&&h.lic!==lic)return; if(fines&&!(h.amp>0))return;
       var f=val(h,'findings'); shown++;
       out.push("<tr><td class='name'><a href='"+h.page+"'>"+h.name+"</a><div class='sub'>"+h.city+"</div></td>"+
         "<td class='num'>"+h.city+"</td><td class='num strong'>"+f+"</td><td class='num'>$"+Math.round(h.amp).toLocaleString()+
@@ -872,7 +874,7 @@ window.YEARS = @@YEARS_JSON@@;
     th.addEventListener('click',function(){var k=th.getAttribute('data-k');
       if(sortKey===k){sortDir*=-1;}else{sortKey=k;sortDir=(k==='name'||k==='city'||k==='last')?1:-1;}render();});
   });
-  ['f-region','f-city','f-from','f-to','f-fines'].forEach(function(id){
+  ['f-region','f-city','f-licensee','f-from','f-to','f-fines'].forEach(function(id){
     document.getElementById(id).addEventListener('change',render);
   });
   document.getElementById('f-to').value=window.YEARS[window.YEARS.length-1]||'';
@@ -884,6 +886,8 @@ window.YEARS = @@YEARS_JSON@@;
     city_opts = "".join("<option value='%s'>%s</option>" % (esc(c), esc(c)) for c in cities)
     regions = sorted({h["region"] for h in homes_data})
     region_opts = "".join("<option value='%s'>%s</option>" % (esc(r), esc(r)) for r in regions)
+    licensees = sorted({home_lic.get(hn, "") for hn in by if home_lic.get(hn, "")})
+    licensee_opts = "".join("<option value='%s'>%s</option>" % (esc(l), esc(l)) for l in licensees)
     year_opts_all = "".join("<option value='%s'>%s</option>" % (y, y) for y in year_set)
     reps = {
         "@@REGION@@": esc(region_label),
@@ -896,6 +900,7 @@ window.YEARS = @@YEARS_JSON@@;
         "@@TOTAL_AMP@@": format(int(total_amp), ","),
         "@@REGION_OPTS@@": region_opts,
         "@@CITY_OPTS@@": city_opts,
+        "@@LICENSEE_OPTS@@": licensee_opts,
         "@@YEAR_OPTS@@": year_opts_all,
         "@@ROWS@@": rows_html,
         "@@HOMES_JSON@@": homes_json,
