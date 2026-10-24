@@ -1,0 +1,258 @@
+Toronto|Toronto
+Scarborough|Toronto
+Etobicoke|Toronto
+North York|Toronto
+East York|Toronto
+Vanier|Toronto
+Unionville|Toronto
+Richmond Hill|York Region
+Markham|York Region
+Newmarket|York Region
+Aurora|York Region
+Beeton|York Region
+Thornbury|York Region
+Stouffville|York Region
+Uxbridge|York Region
+Sutton West|York Region
+Woodbridge|York Region
+Vaughan|York Region
+Mississauga|Peel
+Brampton|Peel
+Bolton|Peel
+Maple|Peel
+Oakville|Halton
+Burlington|Halton
+Milton|Halton
+Georgetown|Halton
+Beamsville|Halton
+Oshawa|Durham
+Pickering|Durham
+Ajax|Durham
+Whitby|Durham
+Bowmanville|Durham
+Port Perry|Durham
+Hamilton|Hamilton
+Ancaster|Hamilton
+Dundas|Hamilton
+Stoney Creek|Hamilton
+Haliburton|Haliburton
+Niagara Falls|Niagara
+St Catharines|Niagara
+Welland|Niagara
+Fort Erie|Niagara
+Port Colborne|Niagara
+Grimsby|Niagara
+Niagara On The Lake|Niagara
+Virgil|Niagara
+Newcastle|Niagara
+Clarence Creek|Niagara
+Vineland|Niagara
+Waterdown|Niagara
+Kitchener|Waterloo Region
+Waterloo|Waterloo Region
+Cambridge|Waterloo Region
+L'orignal|Waterloo Region
+St Jacobs|Waterloo Region
+Thessalon|Waterloo Region
+Puslinch|Waterloo Region
+Brantford|Brant
+Fergus|Brant
+Walkerton|Brant
+Guelph|Wellington
+Woodstock|Wellington
+Elmira|Wellington
+Lancaster|Wellington
+Delhi|Wellington
+St Marys|Wellington
+Norwood|Wellington
+New Hamburg|Wellington
+Winchester|Wellington
+Orangeville|Dufferin
+Harriston|Dufferin
+Tavistock|Dufferin
+Port Dover|Dufferin
+Markdale|Dufferin
+Lakefield|Dufferin
+Barrie|Simcoe
+Collingwood|Simcoe
+Orillia|Simcoe
+Midland|Simcoe
+Meaford|Simcoe
+Penetanguishene|Simcoe
+Alliston|Simcoe
+King City|Simcoe
+Bradford|Simcoe
+Keswick|Simcoe
+Creemore|Simcoe
+Minden|Simcoe
+Stayner|Simcoe
+Hensall|Simcoe
+Owen Sound|Grey
+Shelburne|Grey
+Listowel|Grey
+Lions Head|Grey
+Elmvale|Grey
+Komoka|Grey
+Mount Forest|Grey
+Goderich|Huron
+Wingham|Huron
+Kincardine|Huron
+Wallaceburg|Huron
+Ohsweken|Huron
+Clinton|Huron
+Delaware|Huron
+Ingersoll|Oxford
+Tillsonburg|Oxford
+Exeter|Oxford
+Milverton|Oxford
+Stratford|Perth
+Paris|Perth
+Stirling|Perth
+Emo|Perth
+Palmerston|Perth
+Parkhill|Perth
+Napanee|Lennox & Addington
+Picton|Prince Edward
+Deseronto|Prince Edward
+Mitchell|Prince Edward
+Kemptville|Prince Edward
+Plantagenet|Leeds-Grenville
+Maxville|Leeds-Grenville
+Long Sault|Leeds-Grenville
+Belleville|Frontenac
+Trenton|Frontenac
+Brockville|Frontenac
+Smiths Falls|Frontenac
+Southampton|Frontenac
+Havelock|Frontenac
+Limoges|Frontenac
+Gananoque|Frontenac
+Kingston|Kingston
+Lindsay|Hastings
+Brighton|Haldimand
+Athens|Hastings
+Courtland|Hastings
+Lucknow|Hastings
+Tweed|Hastings
+Alexandria|Hastings
+Cobourg|Northumberland
+Port Hope|Northumberland
+Campbellford|Kawartha Lakes
+Peterborough|Peterborough
+Fenelon Falls|Peterborough
+Bobcaygeon|Peterborough
+Marmora|Kawartha Lakes
+Bracebridge|Muskoka
+Huntsville|Muskoka
+Beaverton|Muskoka
+Parry Sound|Parry Sound
+Gravenhurst|Parry Sound
+Barrys Bay|Parry Sound
+Corbeil|Parry Sound
+Renfrew|Renfrew
+Arnprior|Renfrew
+Bancroft|Renfrew
+Deep River|Renfrew
+Carleton Place|Renfrew
+Ottawa|Ottawa-Carleton
+Nepean|Ottawa-Carleton
+Kanata|Ottawa-Carleton
+Gloucester|Ottawa-Carleton
+Stittsville|Ottawa-Carleton
+Metcalfe|Ottawa-Carleton
+Watford|Ottawa-Carleton
+Almonte|Lanark
+Bourget|Prescott-Russell
+Hawkesbury|Prescott-Russell
+Cornwall|Prescott-Russell
+Pembroke|Prescott-Russell
+Prescott|Prescott-Russell
+Warkworth|Prescott-Russell
+North Bay|Timiskaming
+Cobden|Timiskaming
+Temiskaming Shores|Timiskaming
+Haileybury|Timiskaming
+Mattawa|Timiskaming
+Espanola|Timiskaming
+Sturgeon Falls|Timiskaming
+Kirkland Lake|Timiskaming
+Blind River|Thunder Bay
+Sudbury|Sudbury
+Elliot Lake|Sudbury
+Northbrook|Sudbury
+Sault Ste. Marie|Algoma
+Hearst|Algoma
+Cochrane|Algoma
+Wawa|Algoma
+Iroquois Falls|Nipissing
+Smooth Rock Falls|Algoma
+Englehart|Algoma
+Chapleau|Algoma
+Gore Bay|Algoma
+Terrace Bay|Algoma
+Wikwemikong|Algoma
+Kapuskasing|Nipissing
+Hornepayne|Nipissing
+Powassan|Nipissing
+Thunder Bay|Thunder Bay
+Kenora|Kenora
+Dryden|Kenora
+Nipigon|Kenora
+Geraldton|Kenora
+Fort Frances|Kenora
+Red Lake|Kenora
+Jasper|Kenora
+Glenburnie|Kenora
+Manitouwadge|Kenora
+Marathon|Kenora
+Sioux Lookout|Kenora
+Rainy River|Rainy River
+Atikokan|Rainy River
+Little Current|Manitoulin
+Chatham|Chatham-Kent
+Leamington|Chatham-Kent
+Tecumseh|Chatham-Kent
+Ridgetown|Chatham-Kent
+Blenheim|Chatham-Kent
+Kingsville|Chatham-Kent
+Val Caron|Chatham-Kent
+Windsor|Windsor-Essex
+Essex|Windsor-Essex
+Amherstburg|Windsor-Essex
+Amherstview|Windsor-Essex
+Sarnia|Lambton
+Strathroy|Lambton
+Petrolia|Lambton
+Port Stanley|Lambton
+London|Middlesex
+Hanover|Middlesex
+Arthur|Middlesex
+St Thomas|Elgin
+Aylmer|Elgin
+Hagersville|Elgin
+Simcoe|Norfolk
+Dunnville|Norfolk
+Brussels|Haldimand
+Southwold|Haldimand
+Durham|Haldimand
+Townsend|Haldimand
+Chelmsford|Haldimand
+Seaforth|Bruce
+Wiarton|Bruce
+Ailsa Craig|Bruce
+Cannifton|Bruce
+Cannington|Bruce
+Dutton|Bruce
+Fordwich|Bruce
+Forest|Bruce
+Matheson|Bruce
+Millbrook|Bruce
+Sarsfield|Bruce
+South Woodslee|Bruce
+Wardsville|Bruce
+Zurich|Bruce
+Kirkhead|Bruce
+Lakeshore|Other
+Akwesasne|Frontenac
+Perth|Perth
+Timmins|Timiskaming

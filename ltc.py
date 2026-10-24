@@ -373,6 +373,18 @@ def home_file(hn):
 
 
 # ---------------------------------------------------------------- main dashboard
+def load_city_region():
+    p = BASE / "geo" / "city_region.txt"
+    m = {}
+    if p.exists():
+        for line in p.read_text(encoding="utf-8").splitlines():
+            if "|" in line:
+                k, _, v = line.partition("|")
+                if k:
+                    m[k] = v
+    return m
+
+
 def render_dashboard(homes, insp, findings, region_label):
     by = defaultdict(lambda: dict(insp=0, wn=0, amp=0.0, co=0, byyear={}, first=None, last=None))
     for r in insp:
@@ -399,12 +411,14 @@ def render_dashboard(homes, insp, findings, region_label):
     dmin = min((r["date_issued"] for r in insp if r.get("date_issued")), default="")
     dmax = max((r["date_issued"] for r in insp if r.get("date_issued")), default="")
     cities = sorted({c for c in home_city.values() if c})
+    city_region = load_city_region()
 
     # homes data for the interactive table
     homes_data = []
     for hn, b in by.items():
         homes_data.append({
             "hn": hn, "name": home_name.get(hn, hn), "city": home_city.get(hn, ""),
+            "region": city_region.get(home_city.get(hn, ""), "Other"),
             "licensee": home_lic.get(hn, ""), "url": HOME_URL.format(hn=hn),
             "page": home_file(hn), "byyear": b["byyear"], "amp": round(b["amp"], 2),
             "co": b["co"], "insp": b["insp"], "last": b["last"] or "",
@@ -486,6 +500,7 @@ details.method p, details.method li{font-size:13px;color:#333}
 <section>
 <h2>Homes compared by findings</h2>
 <div class="toolbar">
+<label>Region <select id="f-region"><option value="">All</option>@@REGION_OPTS@@</select></label>
 <label>City <select id="f-city"><option value="">All</option>@@CITY_OPTS@@</select></label>
 <label>Years <select id="f-from">@@YEAR_OPTS@@</select> to <select id="f-to">@@YEAR_OPTS@@</select></label>
 <label><input type="checkbox" id="f-fines"> Fines only</label>
@@ -546,13 +561,13 @@ window.YEARS = @@YEARS_JSON@@;
   function fromV(){var e=document.getElementById('f-from');return e.value||0;}
   function toV(){var e=document.getElementById('f-to');return e.value||9999;}
   function render(){
-    var city=document.getElementById('f-city').value, fines=document.getElementById('f-fines').checked;
+    var region=document.getElementById('f-region').value, city=document.getElementById('f-city').value, fines=document.getElementById('f-fines').checked;
     var tb=document.querySelector('#tbl tbody'), out=[], shown=0;
     var list=window.HOMES.slice().sort(function(a,b){var x=val(a,sortKey),y=val(b,sortKey);
       if(typeof x==='string'){x=String(x).toLowerCase();y=String(y).toLowerCase();}
       return (x<y?-1:x>y?1:0)*sortDir;});
     list.forEach(function(h){
-      if(city&&h.city!==city)return; if(fines&&!(h.amp>0))return;
+      if(region&&h.region!==region)return; if(city&&h.city!==city)return; if(fines&&!(h.amp>0))return;
       var f=val(h,'findings'); shown++;
       out.push("<tr><td class='name'><a href='"+h.page+"'>"+h.name+"</a><div class='sub'>"+h.city+"</div></td>"+
         "<td class='num'>"+h.city+"</td><td class='num strong'>"+f+"</td><td class='num'>$"+Math.round(h.amp).toLocaleString()+
@@ -565,7 +580,7 @@ window.YEARS = @@YEARS_JSON@@;
     th.addEventListener('click',function(){var k=th.getAttribute('data-k');
       if(sortKey===k){sortDir*=-1;}else{sortKey=k;sortDir=(k==='name'||k==='city'||k==='last')?1:-1;}render();});
   });
-  ['f-city','f-from','f-to','f-fines'].forEach(function(id){
+  ['f-region','f-city','f-from','f-to','f-fines'].forEach(function(id){
     document.getElementById(id).addEventListener('change',render);
   });
   document.getElementById('f-to').value=window.YEARS[window.YEARS.length-1]||'';
@@ -575,6 +590,8 @@ window.YEARS = @@YEARS_JSON@@;
 </body></html>
 """
     city_opts = "".join("<option value='%s'>%s</option>" % (esc(c), esc(c)) for c in cities)
+    regions = sorted({h["region"] for h in homes_data})
+    region_opts = "".join("<option value='%s'>%s</option>" % (esc(r), esc(r)) for r in regions)
     year_opts_all = "".join("<option value='%s'>%s</option>" % (y, y) for y in year_set)
     reps = {
         "@@REGION@@": esc(region_label),
@@ -585,6 +602,7 @@ window.YEARS = @@YEARS_JSON@@;
         "@@TOTAL_NC@@": str(total_nc),
         "@@TOTAL_CO@@": str(total_co),
         "@@TOTAL_AMP@@": format(int(total_amp), ","),
+        "@@REGION_OPTS@@": region_opts,
         "@@CITY_OPTS@@": city_opts,
         "@@YEAR_OPTS@@": year_opts_all,
         "@@ROWS@@": rows_html,
@@ -700,6 +718,9 @@ select{font-size:13px;padding:4px 8px;border:1px solid var(--line);border-radius
 .badge.amp{background:#fff0f0;color:var(--find)}
 .badge.wn{background:#eef2ff;color:#3a4ea8}
 .badge.fine{background:#fdeaea;color:#c0392b}
+.fines-toggle{display:inline-flex;align-items:center;gap:6px;margin-left:16px;font-size:13px;color:var(--ink);cursor:pointer;user-select:none}
+.fines-toggle input{accent-color:var(--find);width:15px;height:15px;cursor:pointer}
+.fines-toggle .fcount{color:var(--muted);font-size:12px}
 footer{margin-top:32px;padding-top:16px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
 </style></head>
 <body><div class="wrap">
@@ -722,13 +743,14 @@ footer{margin-top:32px;padding-top:16px;border-top:1px solid var(--line);font-si
 <section>
 <h2>Finding types</h2>
 <label class="note">Year: <select id="mix-year"><option value="">All years</option>@@MIX_YEARS@@</select></label>
+<label class="fines-toggle"><input type="checkbox" id="fines-only"> Fines only <span class="fcount" id="fines-count"></span></label>
 <div id="mix">@@MIX_INIT@@</div>
 </section>
 
 <section>
 <h2>All findings</h2>
 <div class="note">Grouped by report (newest first). Fines are shown with their amount and rationale. Each report links to the Ministry's source page.</div>
-@@LISTING@@
+<div id="listing">@@LISTING@@</div>
 </section>
 
 <footer>Data: publicreports.mltc.gov.on.ca. Findings are as issued by the Ministry, not their resolved status.
@@ -739,6 +761,10 @@ window.FINDINGS = @@FINDINGS_JSON@@;
 window.YEARS = @@YEARS_JSON@@;
 (function(){
   var el=document.getElementById('mix-year');
+  var fo=document.getElementById('fines-only');
+  var listing=document.getElementById('listing');
+  var fcount=document.getElementById('fines-count');
+  function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
   function mix(){
     var y=el.value, c={}, tot=0;
     window.FINDINGS.forEach(function(f){ if(f.t!=='WN')return; if(y&&f.y!==y)return; c[f.c]=(c[f.c]||0)+1; tot++; });
@@ -753,11 +779,34 @@ window.YEARS = @@YEARS_JSON@@;
     out+="<div class='note'>"+tot+" finding(s) shown. Share of total per category.</div>";
     var box=document.getElementById('mix');
     box.innerHTML=out;
-    // re-attach year select (preserving value)
-    var sel=el; // keep original select on top
   }
-  el.addEventListener('change',mix);
+  function renderListing(){
+    var y=el.value, only=fo.checked;
+    var rows=window.FINDINGS.filter(function(f){ if(only&&f.t!=='AMP')return false; if(y&&f.y!==y)return false; return true; });
+    var nAmp=window.FINDINGS.filter(function(f){return f.t==='AMP'&&(!y||f.y===y);}).length;
+    fcount.textContent=only?('('+rows.length+' fine'+(rows.length===1?'':'s')+')'):'';
+    if(only&&!rows.length){ listing.innerHTML='<p class="note">No fines on record'+(y?' for '+esc(y):'')+'.</p>'; return; }
+    var byDate={}, order=[];
+    rows.forEach(function(f){ if(!byDate[f.date]){byDate[f.date]=[];order.push(f.date);} byDate[f.date].push(f); });
+    order.sort(); order.reverse();
+    var out='';
+    order.forEach(function(d){
+      var g=byDate[d];
+      out+="<div class='report'><div class='rhead'><a href='"+esc(g[0].url)+"'>"+esc(d)+"</a> · "+esc(g[0].num)+" · "+g.length+" finding(s)</div>";
+      g.forEach(function(f){
+        var badge=(f.t==='AMP')?"<span class='badge amp'>FINE</span>":"<span class='badge wn'>FINDING</span>";
+        var fine=(f.fine)?"<span class='badge fine'>$"+Math.round(f.fine)+"</span>":"";
+        out+="<div class='finding'><div class='fmeta'>"+badge+fine+" <span class='statute'>"+esc(f.c)+"</span></div>"+
+             "<div class='ftext'>"+esc(f.text||f.title)+"</div><div class='fsrc'>Sources: "+esc(f.src||"—")+"</div></div>";
+      });
+      out+="</div>";
+    });
+    listing.innerHTML=out||'<p class="note">No findings recorded.</p>';
+  }
+  el.addEventListener('change',function(){mix();renderListing();});
+  fo.addEventListener('change',renderListing);
   mix();
+  renderListing();
 })();
 </script>
 </body></html>
