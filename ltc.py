@@ -866,16 +866,6 @@ details.method p, details.method li{font-size:13px;color:#333}
 <body><div class="wrap">
 <h1>Ontario LTC Inspection Comparison <span class="sub">— @@REGION@@</span></h1>
 <div class="sub">Public inspection findings, Ministry of Long-Term Care · @@DATE_RANGE@@ · generated @@GENERATED@@</div>
-<div class="cards">
-<div class="card"><div class="n">@@N_HOMES@@</div><div class="l">Homes</div></div>
-<div class="card"><div class="n">@@TOTAL_INS@@</div><div class="l">Inspections</div></div>
-<div class="card"><div class="n">@@TOTAL_NC@@</div><div class="l">Findings</div></div>
-<div class="card"><div class="n">@@TOTAL_CO@@</div><div class="l">CO-related</div></div>
-<div class="card"><div class="n">$@@TOTAL_AMP@@</div><div class="l">Fines</div></div>
-</div>
-
-<section>
-<h2>Homes compared by findings</h2>
 <div class="toolbar">
 <label>Region <select id="f-region"><option value="">All</option>@@REGION_OPTS@@</select></label>
 <label>City <select id="f-city"><option value="">All</option>@@CITY_OPTS@@</select></label>
@@ -884,6 +874,16 @@ details.method p, details.method li{font-size:13px;color:#333}
 <label><input type="checkbox" id="f-fines"> Fines only</label>
 <span class="note" id="f-count"></span>
 </div>
+<div class="cards">
+<div class="card"><div class="n" id="agg-homes">@@N_HOMES@@</div><div class="l">Homes</div></div>
+<div class="card"><div class="n" id="agg-insp">@@TOTAL_INS@@</div><div class="l">Inspections</div></div>
+<div class="card"><div class="n" id="agg-findings">@@TOTAL_NC@@</div><div class="l">Findings</div></div>
+<div class="card"><div class="n" id="agg-co">@@TOTAL_CO@@</div><div class="l">CO-related</div></div>
+<div class="card"><div class="n" id="agg-fines">$@@TOTAL_AMP@@</div><div class="l">Fines</div></div>
+</div>
+
+<section>
+<h2>Homes compared by findings</h2>
 <table id="tbl">
 <thead><tr>
 <th data-k="name">Home</th><th data-k="city">City</th>
@@ -946,6 +946,16 @@ window.YEARS = @@YEARS_JSON@@;
         "</td><td class='num'>"+h.insp+"</td><td class='num'>"+h.co+"</td><td class='num'>"+(h.last||"")+"</td></tr>");
     });
     tb.innerHTML=out.join("");
+    var sInsp=0, sFind=0, sCo=0, sFine=0;
+    list.forEach(function(h){
+      if(region&&h.region!==region)return; if(city&&h.city!==city)return; if(lic&&h.lic!==lic)return; if(fines&&!(h.amp>0))return;
+      sInsp+=h.insp; sFind+=val(h,'findings'); sCo+=h.co; sFine+=h.amp;
+    });
+    document.getElementById('agg-homes').textContent=shown;
+    document.getElementById('agg-insp').textContent=sInsp;
+    document.getElementById('agg-findings').textContent=sFind;
+    document.getElementById('agg-co').textContent=sCo;
+    document.getElementById('agg-fines').textContent='$'+Math.round(sFine).toLocaleString();
     document.getElementById('f-count').textContent=shown+" of "+window.HOMES.length+" homes";
   }
   document.querySelectorAll('#tbl th').forEach(function(th){
