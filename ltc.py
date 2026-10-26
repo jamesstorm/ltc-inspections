@@ -190,10 +190,40 @@ _WN_AMP_REL_RE = re.compile(r"Related\s+to\s+Written\s+Notification\s+NC\s*#?\s*
 _WN_AMP_STOP_RE = re.compile(
     r"^(Compliance History|This is the (?:first|second|third|fourth|fifth)"
     r"|Invoice with payment|Licensees must not pay|By submitting a payment)", re.I)
-# narrative (incident description) start — used only inside quoted-rule units
+# narrative (incident description) start — used only on untagged lines after a
+# recitation (tagged quote lines are exempt). Case-sensitive: narrative lines are
+# sentence-case in the source; regulation text opening a line is not.
 _WN_NARR_RE = re.compile(
-    r"^(?:The licensee (?:has|was|were|failed|did|is not|was not|should|must not|is required to have)"
-    r"|Staff\b|An incident|A resident|The home\b|The resident\b|During\b|Ongoing\b|One of\b|It\b|On day\b)", re.I)
+    r"^(?:[A-Z]\)\s"                                        # lettered incident part "A) ..."
+    r"|There (?:was|is|were|had)\b"
+    r"|The (?:home|resident|DOC|Director|staff)(?:\b|['\u2019])"
+    r"|The [Ll]icensee (?!shall|must|will)"
+    r"|Staff\b|An incident|A resident"
+    r"|(?:\d+|Two|Three|Several|Multiple|Both)\s+(?:staff|residents?|family members?|members?|witnesses?|nurses?|PSWs?)\b"
+    r"|\d+\.\s*The [Ll]icensee (?!shall|must|will)"
+    r"|In accordance"
+    r"|Records\b"
+    r"|As per\b"
+    r"|A (?:complaint|CIR|Critical Incident Report|critical incident)\b"
+    r"|An (?:allegation|incident|accident)\b"
+    r"|CIR\b"
+    r"|During\b|Ongoing\b|One of\b|It\b"
+    r"|On (?:a|the|day|multiple|several|each|numerous)\b"
+    r"|When \w+ing\b"
+    r"|As part of the"
+    r"|\([a-z]{1,3}\)\s+(?:On (?:a|the|several|multiple)|As per|There (?:was|is|were)|Records?\b))")
+# unanchored narrative signal: past-tense event language ("was documented",
+# "were observed", "was not reported") — regulation text is present/imperative,
+# the incident narrative is past-tense. Used in addition to the anchored opener.
+_WN_NARR_SUB = re.compile(r"\b(?:was|were)\s+(?:not\s+|had\s+not\s+)?[a-z]+ed\b")
+# mid-line narrative: the ministry sometimes concatenates the narrative onto the
+# recitation line ("... s. 140 (2).The licensee has failed to ensure ...").
+# Split a quote line there — the section boundary + narrative opener must both
+# be present, and "shall/must/will/is required" (regulation voice) is excluded.
+_WN_NARR_MID = re.compile(
+    r"(?:[.)]|^)\s*(?=(?:The [Ll]icensee (?!shall|must|will|is required)"
+    r"|Staff\b|An incident|A resident\b|There (?:was|is)\b|Records\b|As per\b"
+    r"|In accordance|On (?:a|the|day)\b|When \w+ing\b))")
 _WN_MID_SOURCES_RE = re.compile(r"\s+Sources?\s*:\s*")
 
 
@@ -256,6 +286,17 @@ def _wn_split_unit(lines):
     continuations; the incident narrative is the contiguous tail starting at
     the first clearly-narrative line.
     """
+    # a narrative can be concatenated onto a recitation line
+    # ("... s. 140 (2).The licensee has failed ..."): split it into two lines
+    expanded = []
+    for t, tg in lines:
+        m = _WN_NARR_MID.search(t)
+        if m and m.start() > 0:
+            expanded.append((t[:m.end()].rstrip(), tg))
+            expanded.append((t[m.end():].lstrip(), tg))
+        else:
+            expanded.append((t, tg))
+    lines = expanded
     recite_i = None
     for i, (t, _) in enumerate(lines):
         if _WN_RECITE_RE.match(t):
@@ -265,7 +306,11 @@ def _wn_split_unit(lines):
         return [], [t for t, _ in lines]
     nstart = len(lines)
     for i in range(recite_i + 1, len(lines)):
-        if _WN_NARR_RE.match(lines[i][0]):
+        t, tg = lines[i]
+        # narrative starts at: a tagged->plain transition, OR a narrative-pattern
+        # line (2025 reports wrap the narrative in spans too, so the pattern
+        # must apply to tagged lines as well)
+        if (not tg and lines[i-1][1]) or _WN_NARR_RE.match(t) or _WN_NARR_SUB.search(t):
             nstart = i
             break
     return [t for t, _ in lines[:nstart]], [t for t, _ in lines[nstart:]]
@@ -339,6 +384,8 @@ def _wn_parse_block(lines, kind):
                     break
         # body
         ptext_lines = _wn_split_midsources(payload, res)
+        if ptext_lines and mode == "sources" and re.match(r"^[A-Z]\)\s", ptext_lines[0][0]):
+            mode = None  # a lettered part (A)/B) resumes the incident narrative
         if mode == "rationale":
             res["rationale"] += (" " if res["rationale"] else "") + " ".join(t for t, _ in ptext_lines)
         elif mode == "sources":
