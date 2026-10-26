@@ -129,6 +129,7 @@ def clean(t):
 
 FINDING_HEAD = re.compile(
     r"WRITTEN\s+NOTIFICATION:|NOTICE\s+OF\s+ADMINISTRATIVE\s+MONETARY\s+PENALTY\s*\(AMP\)", re.I)
+CO_HEAD = re.compile(r"COMPLIANCE\s+ORDER\s+CO\b\s*#?\s*(\d*)\s*", re.I)
 # WN_Details__c arrives as ministry HTML whose structure varies by report era:
 #   2023-era: NC line / "Non-compliance with: <cite>" / violation sentence /
 #             "Rationale and Summary" / narrative paragraphs / "Sources:" / [ref]
@@ -561,6 +562,122 @@ def parse_findings(wn_html):
     return out
 
 
+def parse_co_findings(co_html, co_history=0):
+    """Split a report's CO_Details__c / CO_HP_Details__c HTML into CO finding records.
+
+    CO blocks share the WN line structure (heading -> NC line -> Non-compliance
+    with -> quoted rule -> narrative -> Sources) plus CO-specific fields
+    (ordered actions, due date, Grounds). Returns a list of dicts with keys:
+    seq, type ('CO'), category (= title), title, nc, statute, fine (0.0),
+    source (alias of sources), text, pursuant_to, summary, rationale (None),
+    sources, quoted, ampnum (None), co_number, ordered_actions, due_date,
+    co_history.
+    """
+    lines = _wn_lines(co_html)
+    # CO headings are block-start lines ("COMPLIANCE ORDER CO #NNN <title>");
+    # body references like "Related to Compliance Order CO #NNN" are mid-line
+    # and must not be treated as headings.
+    head_idx = [i for i, (t, _) in enumerate(lines) if CO_HEAD.match(t)]
+    out = []
+    for k, li in enumerate(head_idx):
+        le = head_idx[k + 1] if k + 1 < len(head_idx) else len(lines)
+        res = _parse_co_block(lines[li:le])
+        if res is None:
+            continue
+        res["seq"] = len(out) + 1
+        res["type"] = "CO"
+        res["category"] = res["title"] or "Compliance Order"
+        res["fine"] = 0.0
+        res["ampnum"] = None
+        res["rationale"] = None
+        res["co_history"] = co_history
+        res["source"] = res["sources"]
+        res["text"] = " ".join(x for x in (res.get("summary"), res.get("quoted")) if x).strip()
+        out.append(res)
+    return out
+
+
+def _parse_co_block(lines):
+    """Parse one CO block (list of (text, tagged) lines, header line first)."""
+    res = {"co_number": "", "title": "", "nc": "", "pursuant_to": "", "statute": "",
+           "quoted": "", "summary": "", "sources": "", "ordered_actions": "",
+           "due_date": ""}
+    h = lines[0][0]
+    hm = CO_HEAD.match(h)
+    if hm:
+        res["co_number"] = hm.group(1).lstrip("#")
+        res["title"] = h[hm.end():].strip()
+    mode = None
+    body = []
+    for t, tg in lines[1:]:
+        if t == "":
+            continue
+        m = _WN_NC_RE.match(t)
+        if m:
+            if not res["nc"] and not res["pursuant_to"]:
+                res["nc"] = m.group(1)
+                res["pursuant_to"] = _wn_clean_cite(m.group(2))
+            continue
+        m = _WN_STAT_LINE_RE.match(t)
+        if m:
+            if not res["statute"]:
+                res["statute"] = _wn_clean_cite(m.group(1))
+            continue
+        m = _WN_SOURCES_RE.match(t)
+        if m:
+            mode = "sources"
+            tail = m.group(1).strip()
+            if tail:
+                res["sources"] = (res["sources"] + "; " + tail) if res["sources"] else tail
+            continue
+        if re.match(r"^The\s+inspector\s+is\s+ordering", t, re.I):
+            mode = "order_intro"
+            continue
+        if re.match(r"^(?:The\s+)?[Ll]icensee\s+shall:", t, re.I):
+            mode = "ordered"
+            continue
+        if re.match(r"^Grounds\s*:?\s*$", t, re.I):
+            mode = "grounds"
+            continue
+        if re.match(r"^This\s+order\s+must\s+be\s+complied\s+by\s+(.+)$", t, re.I):
+            res["due_date"] = re.match(r"^This\s+order\s+must\s+be\s+complied\s+by\s+(.+)$", t, re.I).group(1).strip()
+            continue
+        if mode == "sources":
+            tail = t
+            if tail:
+                res["sources"] = (res["sources"] + "; " + tail) if res["sources"] else tail
+        elif mode == "ordered":
+            res["ordered_actions"] = (res["ordered_actions"] + " " + t).strip()
+        elif mode == "grounds":
+            res["summary"] = (res["summary"] + " " + t).strip()
+        elif mode == "order_intro":
+            # the intro line is boilerplate; ignore
+            pass
+        else:
+            # quoted rule text (recitation + continuations) or narrative
+            body.append((t, tg))
+    # classify body: quoted rule text (recitation line + continuations) vs narrative
+    quoted, summary = [], []
+    in_quote = False
+    for t, tg in body:
+        if _WN_RECITE_RE.match(t):
+            in_quote = True
+            quoted.append(t)
+        elif in_quote and not _WN_NARR_RE.match(t):
+            quoted.append(t)
+        else:
+            in_quote = False
+            summary.append(t)
+    res["quoted"] = " ".join(quoted).strip()
+    if res["summary"]:
+        res["summary"] = (res["summary"] + " " + " ".join(summary)).strip()
+    else:
+        res["summary"] = " ".join(summary).strip()
+    if not (res["co_number"] or res["nc"] or res["statute"] or res["summary"] or res["sources"]):
+        return None
+    return res
+
+
 def parse_detail(det):
     wn = det.get("WN_Details__c") or ""
     complied = det.get("Complied__c") or ""
@@ -568,11 +685,19 @@ def parse_detail(det):
     prot_lines = [l.strip() for l in protocols_raw.splitlines() if l.strip()]
     protocols = [l for l in prot_lines if not re.search(r"Inspection Protocols|were used|protocoles", l, re.I)]
     findings = parse_findings(wn)
+    # Compliance Orders: current (CO_Details__c) + prior-year history (CO_HP_Details__c)
+    co_findings = parse_co_findings(det.get("CO_Details__c") or "", co_history=0)
+    co_findings += parse_co_findings(det.get("CO_HP_Details__c") or "", co_history=1)
+    # CO seq continues after the WN/AMP findings within the same report
+    base = len(findings)
+    for i, f in enumerate(co_findings):
+        f["seq"] = base + i + 1
+    findings = findings + co_findings
     return {
         "findings": findings,
         "wn_count": sum(1 for f in findings if f["type"] == "WN"),
         "amp_total": sum(f["fine"] for f in findings),
-        "co_related": len(re.findall(r"Compliance Order", wn, re.I)),
+        "co_related": sum(1 for f in co_findings if f["co_history"] == 0),
         "orders_in_compliance": len(re.findall(r"Order\s*#\d+", complied)),
         "intake_type": re.sub(r"\s+", " ", clean(det.get("Intake_Type__c") or "")).strip(),
         "protocols": protocols,
@@ -599,9 +724,12 @@ def db():
     """)
     # migrate: add structured columns if missing (idempotent)
     have = {r[1] for r in c.execute("PRAGMA table_info(findings)")}
-    for col in ("pursuant_to", "summary", "rationale", "sources", "quoted", "ampnum"):
+    for col in ("pursuant_to", "summary", "rationale", "sources", "quoted", "ampnum",
+                "co_number", "ordered_actions", "due_date"):
         if col not in have:
             c.execute("ALTER TABLE findings ADD COLUMN %s TEXT" % col)
+    if "co_history" not in have:
+        c.execute("ALTER TABLE findings ADD COLUMN co_history INT")
     return c
 
 
@@ -644,12 +772,14 @@ def store_detail(c, inspection_id, home_number, raw, parsed):
     for f in parsed["findings"]:
         c.execute("INSERT INTO findings(finding_id,inspection_id,home_number,seq,type,category,"
                   "title,nc,statute,fine,source,text,pursuant_to,summary,rationale,sources,"
-                  "quoted,ampnum) "
-                  "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  "quoted,ampnum,co_number,ordered_actions,due_date,co_history) "
+                  "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                   ("%s:%d" % (inspection_id, f["seq"]), inspection_id, str(home_number),
                    f["seq"], f["type"], f["category"], f["title"], f["nc"], f["statute"],
                    f["fine"], f["source"], f["text"], f.get("pursuant_to"), f.get("summary"),
-                   f.get("rationale"), f.get("sources"), f.get("quoted"), f.get("ampnum")))
+                   f.get("rationale"), f.get("sources"), f.get("quoted"), f.get("ampnum"),
+                   f.get("co_number"), f.get("ordered_actions"), f.get("due_date"),
+                   f.get("co_history")))
 
 
 # ---------------------------------------------------------------- commands
@@ -761,7 +891,8 @@ def cmd_reparse(args):
     c.commit()
     n_wn = c.execute("SELECT COUNT(*) FROM findings WHERE type='WN'").fetchone()[0]
     n_amp = c.execute("SELECT COUNT(*) FROM findings WHERE type='AMP'").fetchone()[0]
-    print("Re-parsed %d reports -> %d findings (%d WN + %d AMP)" % (len(rows), n_wn + n_amp, n_wn, n_amp))
+    n_co = c.execute("SELECT COUNT(*) FROM findings WHERE type='CO'").fetchone()[0]
+    print("Re-parsed %d reports -> %d findings (%d WN + %d AMP + %d CO)" % (len(rows), n_wn + n_amp + n_co, n_wn, n_amp, n_co))
     print("Reports whose finding count changed: %d" % changed)
 
 
@@ -935,7 +1066,7 @@ details.method p, details.method li{font-size:13px;color:#333}
 </tr></thead>
 <tbody>@@ROWS@@</tbody>
 </table>
-<div class="note">Click a column to sort. “Findings” sums written-notification findings across the selected year range. “Fines” = administrative monetary penalties. “CO-rel” = findings that reference a compliance order. Click a home name for its dashboard.</div>
+<div class="note">Click a column to sort. “Findings” sums written-notification findings across the selected year range. “Fines” = administrative monetary penalties. “CO-rel” = active compliance orders issued in published reports. Click a home name for its dashboard.</div>
 </section>
 
 <details class="method">
@@ -951,7 +1082,8 @@ and/or an <b>administrative monetary penalty (AMP)</b> — a fine.</p>
 <p><b>How it's calculated.</b> For each published report we parse the findings section and record, per finding:
 its type, the regulation section cited, the narrative, the stated source, and any fine. A home's “Findings”
 count is the number of written-notification findings; “Fines” is the sum of AMP amounts; “CO-rel” counts
-findings that reference a compliance order (typically a home that failed to fix a prior order). Counts are by
+active compliance orders issued in published reports (prior-year compliance-order history is shown on each
+home's page). Counts are by
 calendar year of the report issue date.</p>
 <p><b>Important caveats.</b> These are findings <i>issued</i>, not their resolved/closed status — a year with
 many findings can reflect a serious problem <i>or</i> a thorough inspection that was later remediated (follow-up
@@ -1051,6 +1183,7 @@ def _finding_card(f, hn, idx, rel=None):
     """
     url = REPORT_URL.format(iid=f["inspection_id"], hn=hn)
     is_amp = f["type"] == "AMP"
+    is_co = f["type"] == "CO"
     pills = []
     if is_amp:
         pills.append("<span class='pill pill-fine'>Fine \u2013 AMP</span>")
@@ -1058,6 +1191,12 @@ def _finding_card(f, hn, idx, rel=None):
             pills.append("<span class='pill pill-nc'>AMP#%s</span>" % esc(f["ampnum"]))
         if f.get("fine"):
             pills.append("<span class='pill pill-fine'>$%s</span>" % format(int(f["fine"]), ","))
+    elif is_co:
+        pills.append("<span class='pill pill-co'>Compliance Order</span>")
+        if f.get("co_number"):
+            pills.append("<span class='pill pill-nc'>CO#%s</span>" % esc(f["co_number"]))
+        if f.get("co_history"):
+            pills.append("<span class='pill pill-nc'>Prior-year</span>")
     else:
         pills.append("<span class='pill pill-wn'>Written notification</span>")
         if f.get("nc"):
@@ -1075,6 +1214,12 @@ def _finding_card(f, hn, idx, rel=None):
                      "<div class='cquotetext'>%s</div></div>" % esc(f["quoted"]))
     if f.get("summary"):
         parts.append("<div class='csummary'>%s</div>" % esc(f["summary"]))
+    if is_co and f.get("due_date"):
+        parts.append("<div class='cdue'>Due: %s</div>" % esc(f["due_date"]))
+    if is_co and f.get("ordered_actions"):
+        items = [a.strip() for a in re.split(r"\s*\d+\)\s*", f["ordered_actions"]) if a.strip()]
+        parts.append("<div class='corder'><span class='crlabel'>Ordered actions</span><ol>%s</ol></div>"
+                     % "".join("<li>%s</li>" % esc(x) for x in items))
     if rel:  # AMP's related-WN anchor
         parts.append("<div class='crelated'><a class='crel' href='#fc-%d' data-rel='%d'>"
                      "Related to NC#%s \u2014 %s</a></div>"
@@ -1135,6 +1280,8 @@ def render_home_dashboard(home, insp, findings):
                       "pursuant": f.get("pursuant_to"), "summary": f.get("summary"),
                       "rationale": f.get("rationale"), "sources": f.get("sources"),
                       "quoted": f.get("quoted"), "ampnum": f.get("ampnum"),
+                      "co_number": f.get("co_number"), "ordered_actions": f.get("ordered_actions"),
+                      "due_date": f.get("due_date"), "co_history": f.get("co_history"),
                       "seq": f["seq"],
                       "url": REPORT_URL.format(iid=iid, hn=hn)})
         if (date, iid) != cur:  # group by report, not by date
@@ -1194,6 +1341,11 @@ select{font-size:13px;padding:4px 8px;border:1px solid var(--line);border-radius
 .pill-wn{background:#eef3ff;color:#2f6df6}
 .pill-nc{background:#eef0f4;color:#6b7280}
 .pill-fine{background:#fef3f0;color:#e0552b}
+.pill-co{background:#fef9e7;color:#b7950b}
+.cdue{font-size:12px;color:#454a55;margin:6px 0;font-weight:600}
+.corder{background:#f7f8fb;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:8px 0}
+.corder ol{margin:4px 0 0;padding-left:20px}
+.corder li{font-size:13px;color:#3d4657;margin:3px 0}
 .ctopic{font-size:17px;font-weight:700;margin:2px 0 8px}
 .crule{background:#f7f8fb;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:8px 0}
 .crlabel{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);display:block;margin-bottom:2px}
@@ -1265,6 +1417,7 @@ window.YEARS = @@YEARS_JSON@@;
   function card(f,i){
     var pills='';
     if(f.t==='AMP'){pills+="<span class='pill pill-fine'>Fine \u2013 AMP</span>"; if(f.ampnum)pills+="<span class='pill pill-nc'>AMP#"+esc(f.ampnum)+"</span>"; if(f.fine)pills+="<span class='pill pill-fine'>$"+Math.round(f.fine).toLocaleString()+"</span>";}
+    else if(f.t==='CO'){pills+="<span class='pill pill-co'>Compliance Order</span>"; if(f.co_number)pills+="<span class='pill pill-nc'>CO#"+esc(f.co_number)+"</span>"; if(f.co_history)pills+="<span class='pill pill-nc'>Prior-year</span>";}
     else{pills+="<span class='pill pill-wn'>Written notification</span>"; if(f.nc)pills+="<span class='pill pill-nc'>NC#"+esc(f.nc)+"</span>";}
     var h="<div class='fcard' id='fc-"+i+"'><div class='cpills'>"+pills+"</div>";
     h+="<div class='cref'>"+esc(f.num)+" \u00b7 #"+esc(f.seq)+"</div>";
@@ -1272,6 +1425,8 @@ window.YEARS = @@YEARS_JSON@@;
     if(f.t!=='AMP'&&f.s)h+="<div class='crule'><span class='crlabel'>Rule cited</span><div class='crtext'>"+esc(f.s)+"</div></div>";
     if(f.t!=='AMP'&&f.quoted)h+="<div class='cquote'><span class='crlabel'>Rule text</span><div class='cquotetext'>"+esc(f.quoted)+"</div></div>";
     if(f.summary)h+="<div class='csummary'>"+esc(f.summary)+"</div>";
+    if(f.t==='CO'&&f.due_date)h+="<div class='cdue'>Due: "+esc(f.due_date)+"</div>";
+    if(f.t==='CO'&&f.ordered_actions){var items=f.ordered_actions.split(/[0-9]+[)]/).filter(function(x){return x.trim();}); h+="<div class='corder'><span class='crlabel'>Ordered actions</span><ol>"+items.map(function(x){return "<li>"+esc(x.trim())+"</li>";}).join("")+"</ol></div>";}
     if(RELS[i]){var r=RELS[i]; h+="<div class='crelated'><a class='crel' href='#fc-"+r.j+"' data-rel='"+r.j+"'>Related to NC#"+esc(r.nc)+" \u2014 "+esc(r.topic)+"</a></div>";}
     if(f.rationale)h+="<div class='crationale'>"+esc(f.rationale)+"</div>";
     if(f.sources)h+="<div class='csources'>Sources: "+esc(f.sources)+"</div>";
@@ -1280,7 +1435,7 @@ window.YEARS = @@YEARS_JSON@@;
   function flash(id){ var c=document.getElementById(id); if(c){ c.classList.add('flash'); c.scrollIntoView({behavior:'smooth',block:'center'}); setTimeout(function(){ c.classList.remove('flash'); },1600);} }
   function mix(){
     var y=el.value, c={}, tot=0;
-    window.FINDINGS.forEach(function(f){ if(f.t!=='WN')return; if(y&&f.y!==y)return; c[f.c]=(c[f.c]||0)+1; tot++; });
+    window.FINDINGS.forEach(function(f){ if(f.t!=='WN'&&f.t!=='CO')return; if(y&&f.y!==y)return; c[f.c]=(c[f.c]||0)+1; tot++; });
     var items=Object.keys(c).map(function(k){return {k:k,v:c[k]};}).sort(function(a,b){return b.v-a.v;});
     var mx=items.length?items[0].v:1;
     if(!items.length){el.parentElement.innerHTML='<div class="note">No findings in this range.</div>';return;}
@@ -1381,13 +1536,16 @@ def cmd_report(args):
         w = csv.writer(f)
         w.writerow(["home_number", "home", "date_issued", "inspection_number", "type",
                     "category", "nc", "statute", "fine", "source", "text",
-                    "pursuant_to", "summary", "rationale", "sources", "quoted", "ampnum"])
+                    "pursuant_to", "summary", "rationale", "sources", "quoted", "ampnum",
+                    "co_number", "ordered_actions", "due_date", "co_history"])
         for fnd in findings:
             w.writerow([fnd["home_number"], fnd["home_name"], fnd["date_issued"],
                         fnd["inspection_number"], fnd["type"], fnd["category"], fnd["nc"],
                         fnd["statute"], fnd["fine"], fnd["source"], fnd["text"],
                         fnd.get("pursuant_to"), fnd.get("summary"), fnd.get("rationale"),
-                        fnd.get("sources"), fnd.get("quoted"), fnd.get("ampnum")])
+                        fnd.get("sources"), fnd.get("quoted"), fnd.get("ampnum"),
+                        fnd.get("co_number"), fnd.get("ordered_actions"), fnd.get("due_date"),
+                        fnd.get("co_history")])
 
     # CSV: home x year matrix
     by = defaultdict(lambda: dict(wn=0, amp=0.0, insp=0, byyear={}))
