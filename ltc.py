@@ -981,6 +981,7 @@ def _finding_card(f, hn, idx, rel=None):
             pills.append("<span class='pill pill-nc'>NC#%s</span>" % esc(f["nc"]))
     topic = esc(f.get("title") or f.get("category") or "")
     parts = ["<div class='fcard' id='fc-%d'><div class='cpills'>%s</div>" % (idx, "".join(pills))]
+    parts.append("<div class='cref'>%s \u00b7 #%s</div>" % (esc(f["inspection_number"]), esc(f["seq"])))
     if topic:
         parts.append("<div class='ctopic'>%s</div>" % topic)
     if not is_amp and f.get("statute"):
@@ -1051,6 +1052,7 @@ def render_home_dashboard(home, insp, findings):
                       "pursuant": f.get("pursuant_to"), "summary": f.get("summary"),
                       "rationale": f.get("rationale"), "sources": f.get("sources"),
                       "quoted": f.get("quoted"), "ampnum": f.get("ampnum"),
+                      "seq": f["seq"],
                       "url": REPORT_URL.format(iid=iid, hn=hn)})
         if (date, iid) != cur:  # group by report, not by date
             if cur is not None:
@@ -1118,6 +1120,7 @@ select{font-size:13px;padding:4px 8px;border:1px solid var(--line);border-radius
 .csummary{font-size:14px;margin:8px 0}
 .crationale{font-size:13px;color:#454a55;margin:6px 0}
 .csources{font-size:12px;color:var(--muted);margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)}
+.cref{font-size:11px;color:var(--muted);margin:2px 0 6px;font-variant-numeric:tabular-nums}
 .crelated{margin-top:8px;font-size:13px}
 .crel{color:var(--accent);cursor:pointer}
 .crel:hover{text-decoration:underline}
@@ -1181,6 +1184,7 @@ window.YEARS = @@YEARS_JSON@@;
     if(f.t==='AMP'){pills+="<span class='pill pill-fine'>Fine \u2013 AMP</span>"; if(f.ampnum)pills+="<span class='pill pill-nc'>AMP#"+esc(f.ampnum)+"</span>"; if(f.fine)pills+="<span class='pill pill-fine'>$"+Math.round(f.fine).toLocaleString()+"</span>";}
     else{pills+="<span class='pill pill-wn'>Written notification</span>"; if(f.nc)pills+="<span class='pill pill-nc'>NC#"+esc(f.nc)+"</span>";}
     var h="<div class='fcard' id='fc-"+i+"'><div class='cpills'>"+pills+"</div>";
+    h+="<div class='cref'>"+esc(f.num)+" \u00b7 #"+esc(f.seq)+"</div>";
     if(f.title)h+="<div class='ctopic'>"+esc(f.title)+"</div>";
     if(f.t!=='AMP'&&f.s)h+="<div class='crule'><span class='crlabel'>Rule cited</span><div class='crtext'>"+esc(f.s)+"</div></div>";
     if(f.t!=='AMP'&&f.quoted)h+="<div class='cquote'><span class='crlabel'>Rule text</span><div class='cquotetext'>"+esc(f.quoted)+"</div></div>";
