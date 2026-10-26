@@ -344,6 +344,37 @@ def _wn_split_unit(lines):
         if (not tg and lines[i-1][1]) or _WN_NARR_RE.match(t) or _WN_NARR_SUB.search(t):
             nstart = i
             break
+    if nstart == len(lines):
+        # Fallback (2023-era blocks whose incident prose matches no opener
+        # pattern, e.g. "A two-hour repositioning schedule was not immediately
+        # initiated..." or "Following a fall incident..."): the regulation
+        # quote is the contiguous block from the recitation line — recitation,
+        # clause continuations "(a)/1./i.", and imperative/regulation voice.
+        # The first plain sentence-case line carrying past-tense incident
+        # language, after which no regulation voice remains, starts the
+        # narrative. Conservative on purpose: fires only when the primary
+        # detectors found nothing.
+        def _reg_voice(t):
+            return bool(re.search(r"\b(?:shall|must|in accordance with)\b", t, re.I))
+
+        def _clause_start(t):
+            return bool(re.match(r"^\s*\(?\s*[a-z0-9]{1,5}\s*[\.\)]\s", t)
+                        or re.match(r"^\s*\(\s*[ivxlcdm]+\s*\)\s", t))
+
+        def _past_tense(t):
+            return bool(re.search(
+                r"\b(?:was|were|failed|did not|received|observed|notified|"
+                r"reported|documented|demonstrated|performed|conducted|"
+                r"determined|confirmed|witnessed|indicated)\b", t))
+
+        for i in range(recite_i + 1, len(lines)):
+            t = lines[i][0]
+            if (t[:1].isupper() and _past_tense(t) and not _reg_voice(t)
+                    and not _clause_start(t)
+                    and not any(_reg_voice(lines[j][0])
+                                for j in range(i, len(lines)))):
+                nstart = i
+                break
     return [t for t, _ in lines[:nstart]], [t for t, _ in lines[nstart:]]
 
 
@@ -376,9 +407,12 @@ def _wn_parse_block(lines, kind):
                 break
             m = _WN_RATIONALE_RE.match(t)
             if m:
-                mode = "rationale"
+                # The ministry's combined "Rationale and Summary" section IS
+                # the incident narrative (what happened) — route it into
+                # summary, the card's primary text, not a secondary rationale.
+                mode = "summary_tail"
                 if m.group(1).strip():
-                    res["rationale"] = m.group(1).strip()
+                    res["summary"] = (res["summary"] + " " + m.group(1).strip()).strip()
                 continue
             m = _WN_SOURCES_RE.match(t)
             if m:
@@ -417,8 +451,8 @@ def _wn_parse_block(lines, kind):
         ptext_lines = _wn_split_midsources(payload, res)
         if ptext_lines and mode == "sources" and re.match(r"^[A-Z]\)\s", ptext_lines[0][0]):
             mode = None  # a lettered part (A)/B) resumes the incident narrative
-        if mode == "rationale":
-            res["rationale"] += (" " if res["rationale"] else "") + " ".join(t for t, _ in ptext_lines)
+        if mode == "summary_tail":
+            res["summary"] = (res["summary"] + " " + " ".join(t for t, _ in ptext_lines)).strip()
         elif mode == "sources":
             tail = " ".join(t for t, _ in ptext_lines)
             if tail:
@@ -464,7 +498,12 @@ def _wn_parse_block(lines, kind):
                             or res["rationale"] or res["sources"]):
         return None
     res["quoted"] = " ".join(quoted).strip()
-    res["summary"] = " ".join(summary).strip()
+    # Merge the two narrative sources in document order: the classified
+    # untagged summary lines (incident prose before the "Rationale and Summary"
+    # section) come first, then the text accumulated under that section.
+    _classified = " ".join(summary).strip()
+    _accrued = res["summary"].strip()
+    res["summary"] = " ".join(x for x in (_classified, _accrued) if x).strip()
     if kind == "AMP" and not res["summary"]:
         res["summary"] = " ".join(t for u in body_units for t, _ in u[0]).strip()
     return res
