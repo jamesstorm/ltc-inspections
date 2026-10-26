@@ -130,6 +130,11 @@ def clean(t):
 FINDING_HEAD = re.compile(
     r"WRITTEN\s+NOTIFICATION:|NOTICE\s+OF\s+ADMINISTRATIVE\s+MONETARY\s+PENALTY\s*\(AMP\)", re.I)
 CO_HEAD = re.compile(r"COMPLIANCE\s+ORDER\s+CO\b\s*#?\s*(\d*)\s*", re.I)
+# Compliance due date: the phrase is usually embedded at the end of the Sources
+# line ("...; This order must be complied with by <date>") rather than a standalone
+# line, and the vast majority of reports write "complied with by" — so match it
+# anywhere in the text and tolerate the optional "with".
+CO_DUE_RE = re.compile(r"This\s+order\s+must\s+be\s+complied\s+(?:with\s+)?by\s+([A-Z][a-z]+\s+\d{1,2},\s*\d{4})")
 # WN_Details__c arrives as ministry HTML whose structure varies by report era:
 #   2023-era: NC line / "Non-compliance with: <cite>" / violation sentence /
 #             "Rationale and Summary" / narrative paragraphs / "Sources:" / [ref]
@@ -639,8 +644,9 @@ def _parse_co_block(lines):
         if re.match(r"^Grounds\s*:?\s*$", t, re.I):
             mode = "grounds"
             continue
-        if re.match(r"^This\s+order\s+must\s+be\s+complied\s+by\s+(.+)$", t, re.I):
-            res["due_date"] = re.match(r"^This\s+order\s+must\s+be\s+complied\s+by\s+(.+)$", t, re.I).group(1).strip()
+        m = CO_DUE_RE.match(t)
+        if m:
+            res["due_date"] = m.group(1).strip()
             continue
         if mode == "sources":
             tail = t
@@ -673,6 +679,16 @@ def _parse_co_block(lines):
         res["summary"] = (res["summary"] + " " + " ".join(summary)).strip()
     else:
         res["summary"] = " ".join(summary).strip()
+    # The compliance due date is usually embedded at the end of the Sources line
+    # ("...; This order must be complied with by <date>") rather than a standalone
+    # line — pull it out of whichever field it landed in.
+    if not res["due_date"]:
+        for fld in ("sources", "ordered_actions", "summary"):
+            m = CO_DUE_RE.search(res[fld] or "")
+            if m:
+                res["due_date"] = m.group(1).strip()
+                res[fld] = (res[fld][: m.start()] + res[fld][m.end():]).strip(" ;")
+                break
     if not (res["co_number"] or res["nc"] or res["statute"] or res["summary"] or res["sources"]):
         return None
     return res
