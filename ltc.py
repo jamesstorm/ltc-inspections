@@ -33,6 +33,9 @@ import urllib.request
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+import sys as _sys
+sys.path.insert(0, str(Path(__file__).resolve().parent / "legislation"))
+from corpus import Corpus
 
 API_URL = ("https://publicreports.mltc.gov.on.ca/webruntime/api/apex/execute"
           "?language=en-CA&asGuest=true&htmlEncode=false")
@@ -720,6 +723,73 @@ def parse_detail(det):
     }
 
 
+# ---------------------------------------------------------------- canonical enrichment
+def _norm_citation(inst, sec, markers):
+    """Normalize a parsed citation to 'O. Reg. 246/22, s. 55 (2) (b) (i)' style."""
+    parts = [inst, "s. " + sec]
+    for mk in markers:
+        if mk.endswith("."):
+            parts.append(mk)
+        else:
+            parts.append("(" + mk + ")")
+    return ", ".join(parts)
+
+
+def _past_tense_tail(tail):
+    """Conservative past-tense incident detector: past-tense language and no
+    standalone shall/must imperative."""
+    if re.search(r"\b(?:was|were|had|has|have)\b", tail, re.I) and not re.search(
+            r"\b(?:shall|must)\b", tail, re.I):
+        return True
+    return False
+
+
+def apply_canonical(findings, date_issued, corpus):
+    """Enrich each finding with canonical statute text + deterministic split.
+
+    Mutates each finding dict in place, setting canonical / canon_mode and
+    (conservatively) moving a narrative tail from quoted into summary.
+    """
+    for f in findings:
+        f.setdefault("canonical", "")
+        f.setdefault("canon_mode", "")
+        statute = f.get("statute") or ""
+        if not statute:
+            continue
+        inst, sec, markers = Corpus.parse_statute(statute)
+        if inst not in ("O. Reg. 246/22", "FLTCA, 2021") or sec is None:
+            continue
+        section_text = corpus.section_text(inst, sec, date_issued)
+        if not section_text:
+            continue
+        if markers:
+            prov = Corpus.extract_provision(section_text, markers)
+            if len(prov) >= 30 and markers[-1] in prov:
+                f["canonical"] = prov
+                f["canon_mode"] = "provision"
+            else:
+                f["canonical"] = section_text
+                f["canon_mode"] = "section"
+        else:
+            f["canonical"] = section_text
+            f["canon_mode"] = "section"
+        # deterministic split: move narrative tail from quoted into summary.
+        # Conservative: the tail must be past-tense incident language (voice
+        # check) at any coverage >= 0.5, so regulation-text tails that merely
+        # fall outside the canonical n-gram window are never moved.
+        quoted = f.get("quoted") or ""
+        if f["canonical"] and quoted:
+            char_cut, _ = corpus.index(inst, sec, date_issued).split(quoted)
+            if char_cut and char_cut > 0 and char_cut < len(quoted):
+                coverage = char_cut / len(quoted)
+                tail = quoted[char_cut:].strip()
+                if coverage >= 0.5 and _past_tense_tail(tail):
+                    if len(tail) >= 20 and tail not in (f.get("summary") or ""):
+                        f["quoted"] = quoted[:char_cut].rstrip()
+                        f["summary"] = ((f.get("summary") or "") + " " + tail).strip()
+    return findings
+
+
 # ---------------------------------------------------------------- database
 def db():
     c = sqlite3.connect(str(DB))
@@ -741,9 +811,9 @@ def db():
     # migrate: add structured columns if missing (idempotent)
     have = {r[1] for r in c.execute("PRAGMA table_info(findings)")}
     for col in ("pursuant_to", "summary", "rationale", "sources", "quoted", "ampnum",
-                "co_number", "ordered_actions", "due_date"):
+                "co_number", "ordered_actions", "due_date", "canonical", "canon_mode"):
         if col not in have:
-            c.execute("ALTER TABLE findings ADD COLUMN %s TEXT" % col)
+            c.execute("ALTER TABLE findings ADD COLUMN %s TEXT DEFAULT ''" % col)
     if "co_history" not in have:
         c.execute("ALTER TABLE findings ADD COLUMN co_history INT")
     return c
@@ -788,14 +858,14 @@ def store_detail(c, inspection_id, home_number, raw, parsed):
     for f in parsed["findings"]:
         c.execute("INSERT INTO findings(finding_id,inspection_id,home_number,seq,type,category,"
                   "title,nc,statute,fine,source,text,pursuant_to,summary,rationale,sources,"
-                  "quoted,ampnum,co_number,ordered_actions,due_date,co_history) "
-                  "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  "quoted,ampnum,co_number,ordered_actions,due_date,co_history,canonical,canon_mode) "
+                  "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                   ("%s:%d" % (inspection_id, f["seq"]), inspection_id, str(home_number),
                    f["seq"], f["type"], f["category"], f["title"], f["nc"], f["statute"],
                    f["fine"], f["source"], f["text"], f.get("pursuant_to"), f.get("summary"),
                    f.get("rationale"), f.get("sources"), f.get("quoted"), f.get("ampnum"),
                    f.get("co_number"), f.get("ordered_actions"), f.get("due_date"),
-                   f.get("co_history")))
+                   f.get("co_history"), f.get("canonical"), f.get("canon_mode")))
 
 
 # ---------------------------------------------------------------- commands
@@ -880,16 +950,18 @@ def cmd_fetch(args):
 
 def cmd_reparse(args):
     c = db()
-    rows = c.execute("SELECT inspection_id, home_number, raw FROM inspections WHERE fetched_at IS NOT NULL").fetchall()
+    corpus = Corpus()  # offline; local JSON in legislation/
+    rows = c.execute("SELECT inspection_id, home_number, raw, date_issued FROM inspections WHERE fetched_at IS NOT NULL").fetchall()
     city_map, lic_map = {}, {}
     before = dict(c.execute("SELECT inspection_id, COUNT(*) FROM findings GROUP BY inspection_id").fetchall())
     changed = 0
     total_after = 0
-    for iid, hn, raw in rows:
+    for iid, hn, raw, date_issued in rows:
         det = json.loads(raw)
         if isinstance(det, str):  # tolerate double-encoded raw
             det = json.loads(det)
         parsed = parse_detail(det)
+        apply_canonical(parsed["findings"], date_issued or "", corpus)
         store_detail(c, iid, hn, det, parsed)
         n_after = len(parsed["findings"])
         total_after += n_after
@@ -1096,7 +1168,9 @@ published report (a violation of the <i>Fixing Long-Term Care Act, 2021</i> or i
 may issue a <b>compliance order</b> (a binding directive, the most severe enforcement short of licence action)
 and/or an <b>administrative monetary penalty (AMP)</b> — a fine.</p>
 <p><b>How it's calculated.</b> For each published report we parse the findings section and record, per finding:
-its type, the regulation section cited, the narrative, the stated source, and any fine. A home's “Findings”
+its type, the regulation section cited, the narrative, the stated source, and any fine. The rule text shown is
+canonical legislation text from Ontario e-Laws, versioned to the report date; findings citing pre-2022 instruments
+show the ministry's verbatim quote. A home's “Findings”
 count is the number of written-notification findings; “Fines” is the sum of AMP amounts; “CO-rel” counts
 active compliance orders issued in published reports (prior-year compliance-order history is shown on each
 home's page). Counts are by
@@ -1223,11 +1297,20 @@ def _finding_card(f, hn, idx, rel=None):
     if topic:
         parts.append("<div class='ctopic'>%s</div>" % topic)
     if not is_amp and f.get("statute"):
+        rule_cite = f["statute"]
+        _inst, _sec, _mk = Corpus.parse_statute(rule_cite)
+        if _inst in ("O. Reg. 246/22", "FLTCA, 2021") and _sec:
+            rule_cite = _norm_citation(_inst, _sec, _mk)
         parts.append("<div class='crule'><span class='crlabel'>Rule cited</span>"
-                     "<div class='crtext'>%s</div></div>" % esc(f["statute"]))
-    if not is_amp and f.get("quoted"):
+                     "<div class='crtext'>%s</div></div>" % esc(rule_cite))
+    rule_text = f.get("canonical") or f.get("quoted") or ""
+    if not is_amp and rule_text:
         parts.append("<div class='cquote'><span class='crlabel'>Rule text</span>"
-                     "<div class='cquotetext'>%s</div></div>" % esc(f["quoted"]))
+                     "<div class='cquotetext'>%s</div></div>" % esc(rule_text))
+        if f.get("canonical"):
+            _i2, _s2, _m2 = Corpus.parse_statute(f.get("statute") or "")
+            parts.append("<div class='csrc'>Canonical text \u2014 Ontario e-Laws, %s (consolidation in force %s)</div>"
+                         % (esc(_i2 or ""), esc(f.get("date_issued") or "")))
     if f.get("summary"):
         parts.append("<div class='csummary'>%s</div>" % esc(f["summary"]))
     if is_co and f.get("due_date"):
@@ -1246,6 +1329,17 @@ def _finding_card(f, hn, idx, rel=None):
         parts.append("<div class='csources'>Sources: %s</div>" % esc(f["sources"]))
     parts.append("</div>")
     return "".join(parts)
+
+
+def _norm_cite_for(f):
+    """Normalized citation for a finding, or '' if not in-corpus."""
+    st = f.get("statute") or ""
+    if not st:
+        return ""
+    inst, sec, mk = Corpus.parse_statute(st)
+    if inst in ("O. Reg. 246/22", "FLTCA, 2021") and sec:
+        return _norm_citation(inst, sec, mk)
+    return ""
 
 
 def render_home_dashboard(home, insp, findings):
@@ -1298,6 +1392,8 @@ def render_home_dashboard(home, insp, findings):
                       "quoted": f.get("quoted"), "ampnum": f.get("ampnum"),
                       "co_number": f.get("co_number"), "ordered_actions": f.get("ordered_actions"),
                       "due_date": f.get("due_date"), "co_history": f.get("co_history"),
+                      "canonical": f.get("canonical"), "canon_mode": f.get("canon_mode"),
+                      "norm_cite": _norm_cite_for(f),
                       "seq": f["seq"],
                       "url": REPORT_URL.format(iid=iid, hn=hn)})
         if (date, iid) != cur:  # group by report, not by date
@@ -1368,6 +1464,7 @@ select{font-size:13px;padding:4px 8px;border:1px solid var(--line);border-radius
 .crtext{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;color:var(--ink)}
 .cquote{background:#f6f8fb;border:1px solid var(--line);border-left:3px solid #c9d4e8;border-radius:8px;padding:8px 10px;margin:8px 0}
 .cquotetext{font-size:13px;color:#3d4657;line-height:1.45;font-style:italic}
+.csrc{font-size:11px;color:var(--muted);margin-top:4px}
 .csummary{font-size:14px;margin:8px 0}
 .crationale{font-size:13px;color:#454a55;margin:6px 0}
 .csources{font-size:12px;color:var(--muted);margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)}
@@ -1438,8 +1535,8 @@ window.YEARS = @@YEARS_JSON@@;
     var h="<div class='fcard' id='fc-"+i+"'><div class='cpills'>"+pills+"</div>";
     h+="<div class='cref'>"+esc(f.num)+" \u00b7 #"+esc(f.seq)+"</div>";
     if(f.title)h+="<div class='ctopic'>"+esc(f.title)+"</div>";
-    if(f.t!=='AMP'&&f.s)h+="<div class='crule'><span class='crlabel'>Rule cited</span><div class='crtext'>"+esc(f.s)+"</div></div>";
-    if(f.t!=='AMP'&&f.quoted)h+="<div class='cquote'><span class='crlabel'>Rule text</span><div class='cquotetext'>"+esc(f.quoted)+"</div></div>";
+    if(f.t!=='AMP'&&f.s)h+="<div class='crule'><span class='crlabel'>Rule cited</span><div class='crtext'>"+esc(f.norm_cite||f.s)+"</div></div>";
+    if(f.t!=='AMP'&&(f.canonical||f.quoted)){h+="<div class='cquote'><span class='crlabel'>Rule text</span><div class='cquotetext'>"+esc(f.canonical||f.quoted)+"</div></div>"; if(f.canonical)h+="<div class='csrc'>Canonical text \u2014 Ontario e-Laws, "+esc(f.norm_cite.split(',')[0])+" (consolidation in force "+esc(f.date)+")</div>";}
     if(f.summary)h+="<div class='csummary'>"+esc(f.summary)+"</div>";
     if(f.t==='CO'&&f.due_date)h+="<div class='cdue'>Due: "+esc(f.due_date)+"</div>";
     if(f.t==='CO'&&f.ordered_actions){var items=f.ordered_actions.split(/[0-9]+[)]/).filter(function(x){return x.trim();}); h+="<div class='corder'><span class='crlabel'>Ordered actions</span><ol>"+items.map(function(x){return "<li>"+esc(x.trim())+"</li>";}).join("")+"</ol></div>";}
@@ -1553,7 +1650,8 @@ def cmd_report(args):
         w.writerow(["home_number", "home", "date_issued", "inspection_number", "type",
                     "category", "nc", "statute", "fine", "source", "text",
                     "pursuant_to", "summary", "rationale", "sources", "quoted", "ampnum",
-                    "co_number", "ordered_actions", "due_date", "co_history"])
+                    "co_number", "ordered_actions", "due_date", "co_history",
+                    "canonical", "canon_mode"])
         for fnd in findings:
             w.writerow([fnd["home_number"], fnd["home_name"], fnd["date_issued"],
                         fnd["inspection_number"], fnd["type"], fnd["category"], fnd["nc"],
@@ -1561,7 +1659,7 @@ def cmd_report(args):
                         fnd.get("pursuant_to"), fnd.get("summary"), fnd.get("rationale"),
                         fnd.get("sources"), fnd.get("quoted"), fnd.get("ampnum"),
                         fnd.get("co_number"), fnd.get("ordered_actions"), fnd.get("due_date"),
-                        fnd.get("co_history")])
+                        fnd.get("co_history"), fnd.get("canonical"), fnd.get("canon_mode")])
 
     # CSV: home x year matrix
     by = defaultdict(lambda: dict(wn=0, amp=0.0, insp=0, byyear={}))
