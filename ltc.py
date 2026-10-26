@@ -738,7 +738,8 @@ def _norm_citation(inst, sec, markers):
 def _past_tense_tail(tail):
     """Conservative past-tense incident detector: past-tense language and no
     standalone shall/must imperative."""
-    if re.search(r"\b(?:was|were|had|has|have)\b", tail, re.I) and not re.search(
+    past = r"\b(?:was|were|had|has|have|did)\b|\bfailed to\b"
+    if re.search(past, tail, re.I) and not re.search(
             r"\b(?:shall|must)\b", tail, re.I):
         return True
     return False
