@@ -814,7 +814,7 @@ def render_dashboard(homes, insp, findings, region_label):
     # default server-rendered table rows (total findings desc) for no-JS fallback
     rows_html = "".join(
         "<tr data-hn='%s'><td class='name'><a href='%s'>%s</a><div class='sub'>%s</div></td>"
-        "<td class='num citycell'>%s</td><td class='num strong'>%d</td><td class='num'>$%s</td>"
+        "<td class='citycell'>%s</td><td class='num strong'>%d</td><td class='num'>$%s</td>"
         "<td class='num'>%d</td><td class='num'>%d</td><td class='num'>%s</td></tr>"
         % (esc(h["hn"]), esc(h["page"]), esc(h["name"]), esc(h["city"]), esc(h["city"]),
            sum(h["byyear"].values()), format(int(h["amp"]), ","), h["insp"], h["co"], esc(h["last"]))
@@ -845,11 +845,14 @@ h2{font-size:16px;margin:0 0 6px}
 select,input[type=checkbox]{font-size:13px;padding:4px 6px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink)}
 table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden;font-size:14px}
 th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--line)}
-th{background:#fff;font-size:12px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);cursor:pointer;user-select:none;white-space:nowrap}
+th{background:#f7f8fb;font-size:12px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);cursor:pointer;user-select:none;white-space:nowrap}
 th:hover{color:var(--ink)}
+th.num{text-align:right}
 td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 td.strong{font-weight:700}
-tr:hover td{background:#fafbfe}
+.citycell{white-space:nowrap}
+tbody tr:nth-child(even){background:#fafbfd}
+tr:hover td{background:#eef2fa}
 .name a{font-weight:600}
 .name .sub{margin-top:2px}
 .note{font-size:12px;color:var(--muted);margin-top:8px}
@@ -942,7 +945,7 @@ window.YEARS = @@YEARS_JSON@@;
       if(region&&h.region!==region)return; if(city&&h.city!==city)return; if(lic&&h.lic!==lic)return; if(fines&&!(h.amp>0))return;
       var f=val(h,'findings'); shown++;
       out.push("<tr><td class='name'><a href='"+h.page+"'>"+h.name+"</a><div class='sub'>"+h.city+"</div></td>"+
-        "<td class='num'>"+h.city+"</td><td class='num strong'>"+f+"</td><td class='num'>$"+Math.round(h.amp).toLocaleString()+
+        "<td>"+h.city+"</td><td class='num strong'>"+f+"</td><td class='num'>$"+Math.round(h.amp).toLocaleString()+
         "</td><td class='num'>"+h.insp+"</td><td class='num'>"+h.co+"</td><td class='num'>"+(h.last||"")+"</td></tr>");
     });
     tb.innerHTML=out.join("");
