@@ -959,8 +959,13 @@ window.YEARS = @@YEARS_JSON@@;
 
 
 # ---------------------------------------------------------------- per-home dashboard
-def _finding_card(f, hn):
-    """Render one finding as a structured card (server-side, no-JS fallback)."""
+def _finding_card(f, hn, idx, rel=None):
+    """Render one finding as a structured card (server-side, no-JS fallback).
+
+    idx = position in the home's findings array (matches the JS window.FINDINGS
+    index) -> stable id fc-<idx> on the card div. rel = optional dict
+    {j, nc, topic} of the related WN card for an AMP.
+    """
     url = REPORT_URL.format(iid=f["inspection_id"], hn=hn)
     is_amp = f["type"] == "AMP"
     pills = []
@@ -975,7 +980,7 @@ def _finding_card(f, hn):
         if f.get("nc"):
             pills.append("<span class='pill pill-nc'>NC#%s</span>" % esc(f["nc"]))
     topic = esc(f.get("title") or f.get("category") or "")
-    parts = ["<div class='fcard'><div class='cpills'>%s</div>" % "".join(pills)]
+    parts = ["<div class='fcard' id='fc-%d'><div class='cpills'>%s</div>" % (idx, "".join(pills))]
     if topic:
         parts.append("<div class='ctopic'>%s</div>" % topic)
     if not is_amp and f.get("statute"):
@@ -986,6 +991,10 @@ def _finding_card(f, hn):
                      "<div class='cquotetext'>%s</div></div>" % esc(f["quoted"]))
     if f.get("summary"):
         parts.append("<div class='csummary'>%s</div>" % esc(f["summary"]))
+    if rel:  # AMP's related-WN anchor
+        parts.append("<div class='crelated'><a class='crel' href='#fc-%d' data-rel='%d'>"
+                     "Related to NC#%s \u2014 %s</a></div>"
+                     % (rel["j"], rel["j"], esc(rel["nc"]), esc(rel["topic"] or "")))
     if f.get("rationale"):
         parts.append("<div class='crationale'>%s</div>" % esc(f["rationale"]))
     if f.get("sources"):
@@ -1020,10 +1029,19 @@ def render_home_dashboard(home, insp, findings):
 
     # findings data for the interactive mix + listing
     date_count = Counter(f["date_issued"] for f in findings)
+    # AMP -> related WN relation map (first WN in array order with same num+nc)
+    rels = {}
+    for i, f in enumerate(findings):
+        if f["type"] == "AMP" and f.get("nc"):
+            for j, g in enumerate(findings):
+                if (g["type"] == "WN" and g["inspection_number"] == f["inspection_number"]
+                        and g["nc"] == f["nc"]):
+                    rels[i] = {"j": j, "nc": f["nc"], "topic": g["title"] or g["category"] or ""}
+                    break
     fdata = []
     listing = []
     cur = None
-    for f in findings:  # already date desc
+    for i, f in enumerate(findings):  # already date desc
         date = f.get("date_issued") or ""
         fdata.append({"y": date[:4], "c": f["category"], "t": f["type"],
                       "s": f["statute"], "fine": f["fine"] or 0, "date": date,
@@ -1040,7 +1058,7 @@ def render_home_dashboard(home, insp, findings):
             listing.append("<div class='report'><div class='rhead'><a href='%s'>%s</a> \u00b7 %s \u00b7 %d finding(s)</div>"
                            % (esc(REPORT_URL.format(iid=f["inspection_id"], hn=hn)), esc(date),
                               esc(f["inspection_number"]), date_count.get(date, 0)))
-        listing.append(_finding_card(f, hn))
+        listing.append(_finding_card(f, hn, i, rels.get(i)))
     if cur is not None:
         listing.append("</div>")
     listing_html = "".join(listing) if listing else "<p class='note'>No findings recorded.</p>"
@@ -1099,6 +1117,11 @@ select{font-size:13px;padding:4px 8px;border:1px solid var(--line);border-radius
 .csummary{font-size:14px;margin:8px 0}
 .crationale{font-size:13px;color:#454a55;margin:6px 0}
 .csources{font-size:12px;color:var(--muted);margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)}
+.crelated{margin-top:8px;font-size:13px}
+.crel{color:var(--accent);cursor:pointer}
+.crel:hover{text-decoration:underline}
+.fcard.flash{animation:relflash 1.6s ease-out}
+@keyframes relflash{0%{outline:3px solid var(--find);outline-offset:2px}100%{outline:3px solid transparent;outline-offset:2px}}
 .badge{display:inline-block;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;margin-right:6px;vertical-align:middle}
 .badge.amp{background:#fff0f0;color:var(--find)}
 .badge.wn{background:#eef2ff;color:#3a4ea8}
@@ -1150,19 +1173,23 @@ window.YEARS = @@YEARS_JSON@@;
   var listing=document.getElementById('listing');
   var fcount=document.getElementById('fines-count');
   function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
-  function card(f){
+  var RELS={}, revealed={};
+  (function(){ window.FINDINGS.forEach(function(f,i){ if(f.t==='AMP'&&f.nc){ for(var j=0;j<window.FINDINGS.length;j++){var g=window.FINDINGS[j]; if(g.t==='WN'&&g.num===f.num&&g.nc===f.nc){RELS[i]={j:j,nc:f.nc,topic:g.title||g.c||''};break;}} } }); })();
+  function card(f,i){
     var pills='';
     if(f.t==='AMP'){pills+="<span class='pill pill-fine'>Fine \u2013 AMP</span>"; if(f.ampnum)pills+="<span class='pill pill-nc'>AMP#"+esc(f.ampnum)+"</span>"; if(f.fine)pills+="<span class='pill pill-fine'>$"+Math.round(f.fine).toLocaleString()+"</span>";}
     else{pills+="<span class='pill pill-wn'>Written notification</span>"; if(f.nc)pills+="<span class='pill pill-nc'>NC#"+esc(f.nc)+"</span>";}
-    var h="<div class='fcard'><div class='cpills'>"+pills+"</div>";
+    var h="<div class='fcard' id='fc-"+i+"'><div class='cpills'>"+pills+"</div>";
     if(f.title)h+="<div class='ctopic'>"+esc(f.title)+"</div>";
     if(f.t!=='AMP'&&f.s)h+="<div class='crule'><span class='crlabel'>Rule cited</span><div class='crtext'>"+esc(f.s)+"</div></div>";
     if(f.t!=='AMP'&&f.quoted)h+="<div class='cquote'><span class='crlabel'>Rule text</span><div class='cquotetext'>"+esc(f.quoted)+"</div></div>";
     if(f.summary)h+="<div class='csummary'>"+esc(f.summary)+"</div>";
+    if(RELS[i]){var r=RELS[i]; h+="<div class='crelated'><a class='crel' href='#fc-"+r.j+"' data-rel='"+r.j+"'>Related to NC#"+esc(r.nc)+" \u2014 "+esc(r.topic)+"</a></div>";}
     if(f.rationale)h+="<div class='crationale'>"+esc(f.rationale)+"</div>";
     if(f.sources)h+="<div class='csources'>Sources: "+esc(f.sources)+"</div>";
     return h+"</div>";
   }
+  function flash(id){ var c=document.getElementById(id); if(c){ c.classList.add('flash'); c.scrollIntoView({behavior:'smooth',block:'center'}); setTimeout(function(){ c.classList.remove('flash'); },1600);} }
   function mix(){
     var y=el.value, c={}, tot=0;
     window.FINDINGS.forEach(function(f){ if(f.t!=='WN')return; if(y&&f.y!==y)return; c[f.c]=(c[f.c]||0)+1; tot++; });
@@ -1178,9 +1205,10 @@ window.YEARS = @@YEARS_JSON@@;
   }
   function renderListing(){
     var y=el.value, only=fo.checked;
-    var rows=window.FINDINGS.filter(function(f){ if(only&&f.t!=='AMP')return false; if(y&&f.y!==y)return false; return true; });
-    fcount.textContent=only?('('+rows.length+' fine'+(rows.length===1?'':'s')+')'):'';
-    if(only&&!rows.length){ listing.innerHTML='<p class="note">No fines on record'+(y?' for '+esc(y):'')+'.</p>'; return; }
+    var rows=window.FINDINGS.filter(function(f,i){ if(revealed[i])return true; if(only&&f.t!=='AMP')return false; if(y&&f.y!==y)return false; return true; });
+    var fineCount=window.FINDINGS.filter(function(f){return f.t==='AMP'&&(!y||f.y===y);}).length;
+    fcount.textContent=only?('('+fineCount+' fine'+(fineCount===1?'':'s')+')'):'';
+    if(only&&!fineCount&&!Object.keys(revealed).length){ listing.innerHTML='<p class="note">No fines on record'+(y?' for '+esc(y):'')+'.</p>'; return; }
     var byDate={}, order=[];
     rows.forEach(function(f){ if(!byDate[f.date]){byDate[f.date]=[];order.push(f.date);} byDate[f.date].push(f); });
     order.sort(); order.reverse();
@@ -1188,11 +1216,19 @@ window.YEARS = @@YEARS_JSON@@;
     order.forEach(function(d){
       var g=byDate[d];
       out+="<div class='report'><div class='rhead'><a href='"+esc(g[0].url)+"'>"+esc(d)+"</a> \u00b7 "+esc(g[0].num)+" \u00b7 "+g.length+" finding(s)</div>";
-      g.forEach(function(f){ out+=card(f); });
+      g.forEach(function(f){ out+=card(f, window.FINDINGS.indexOf(f)); });
       out+="</div>";
     });
     listing.innerHTML=out||'<p class="note">No findings recorded.</p>';
   }
+  listing.addEventListener('click',function(e){
+    var a=e.target; while(a&&!(a.classList&&a.classList.contains('crel')))a=a.parentNode;
+    if(!a)return; e.preventDefault();
+    var j=+a.getAttribute('data-rel');
+    if(document.getElementById('fc-'+j)){ flash('fc-'+j); return; }
+    revealed[j]=true; renderListing();
+    setTimeout(function(){ flash('fc-'+j); }, 60);
+  });
   el.addEventListener('change',function(){mix();renderListing();});
   fo.addEventListener('change',renderListing);
   mix();
