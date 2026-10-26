@@ -28,6 +28,7 @@ import random
 import sqlite3
 import sys
 import time
+import urllib.error
 import urllib.request
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
@@ -36,6 +37,9 @@ from pathlib import Path
 API_URL = ("https://publicreports.mltc.gov.on.ca/webruntime/api/apex/execute"
           "?language=en-CA&asGuest=true&htmlEncode=false")
 CLASSNAME = "@udd/01pOH000000GbLN"          # Salesforce Apex class id (can change on redeploy)
+METHOD_SEARCH = "getHomeDetailsbyNameOrLocarion"
+METHOD_REPORT_LIST = "getHomeDetails"
+METHOD_REPORT_DETAIL = "getHomeInspectionDetails"
 BASE = Path(__file__).resolve().parent
 DB = BASE / "ltc.db"
 DELAY = 0.25
@@ -45,6 +49,18 @@ REPORT_URL = "https://publicreports.mltc.gov.on.ca/reportDetails?detailId={iid}&
 
 
 # ---------------------------------------------------------------- HTTP / API
+# Bodies that indicate the upstream Apex class id / method identifiers have changed.
+_IDENTIFIER_ERR_MARKERS = ("invalid characters in apex action parameters", "not found")
+
+
+def _is_identifier_error(e, body):
+    """True when a 400 response body signals changed upstream API identifiers."""
+    if not isinstance(e, urllib.error.HTTPError) or e.code != 400:
+        return False
+    low = (body or "").lower()
+    return any(m in low for m in _IDENTIFIER_ERR_MARKERS)
+
+
 def api(method, params, classname=CLASSNAME, retries=4, timeout=40):
     payload = {"namespace": "", "classname": classname, "method": method,
                "isContinuation": False, "params": params, "cacheable": False}
@@ -60,6 +76,21 @@ def api(method, params, classname=CLASSNAME, retries=4, timeout=40):
             })
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 return json.loads(r.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode("utf-8", "replace")
+            except Exception:
+                pass
+            if _is_identifier_error(e, body):
+                raise RuntimeError(
+                    "Upstream API identifiers appear to have changed: Apex class id/method "
+                    "'%s' is no longer valid (HTTP %d: %s). Re-discover the current "
+                    "classname/method per docs/API.md (DevTools -> Network -> apex/execute "
+                    "body) and update CLASSNAME / the METHOD_* constants."
+                    % (classname, e.code, (body or str(e)).strip()[:200]))
+            last = e
+            time.sleep(1.5 * (attempt + 1))
         except Exception as e:
             last = e
             time.sleep(1.5 * (attempt + 1))
@@ -67,18 +98,18 @@ def api(method, params, classname=CLASSNAME, retries=4, timeout=40):
 
 
 def search_homes(term):
-    r = api("getHomeDetailsbyNameOrLocarion", {"homeNameOrLocation": term})
+    r = api(METHOD_SEARCH, {"homeNameOrLocation": term})
     return r.get("returnValue") or []
 
 
 def home_report_list(home_number):
-    r = api("getHomeDetails", {"accountNumber": str(home_number)})
+    r = api(METHOD_REPORT_LIST, {"accountNumber": str(home_number)})
     rl = (r.get("returnValue") or {}).get("reportList")
     return json.loads(rl) if rl else []
 
 
 def report_detail(inspection_id, home_number):
-    r = api("getHomeInspectionDetails",
+    r = api(METHOD_REPORT_DETAIL,
             {"inspectionId": inspection_id, "homeId": str(home_number), "usePublish": True})
     return (r.get("returnValue") or {}).get("inspectionDetails") or {}
 
