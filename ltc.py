@@ -726,13 +726,13 @@ def parse_detail(det):
 # ---------------------------------------------------------------- canonical enrichment
 def _norm_citation(inst, sec, markers):
     """Normalize a parsed citation to 'O. Reg. 246/22, s. 55 (2) (b) (i)' style."""
-    parts = [inst, "s. " + sec]
+    s = inst + ", s. " + sec
     for mk in markers:
         if mk.endswith("."):
-            parts.append(mk)
+            s += " " + mk
         else:
-            parts.append("(" + mk + ")")
-    return ", ".join(parts)
+            s += " (" + mk + ")"
+    return s
 
 
 def _past_tense_tail(tail):
