@@ -1028,7 +1028,7 @@ def render_home_dashboard(home, insp, findings):
     trends_html = "<div class='barrow tall'>" + "".join(tcells) + "</div>"
 
     # findings data for the interactive mix + listing
-    date_count = Counter(f["date_issued"] for f in findings)
+    insp_count = Counter(f["inspection_id"] for f in findings)
     # AMP -> related WN relation map (first WN in array order with same num+nc)
     rels = {}
     for i, f in enumerate(findings):
@@ -1043,6 +1043,7 @@ def render_home_dashboard(home, insp, findings):
     cur = None
     for i, f in enumerate(findings):  # already date desc
         date = f.get("date_issued") or ""
+        iid = f["inspection_id"]
         fdata.append({"y": date[:4], "c": f["category"], "t": f["type"],
                       "s": f["statute"], "fine": f["fine"] or 0, "date": date,
                       "nc": f["nc"], "src": f["source"], "text": f["text"],
@@ -1050,14 +1051,14 @@ def render_home_dashboard(home, insp, findings):
                       "pursuant": f.get("pursuant_to"), "summary": f.get("summary"),
                       "rationale": f.get("rationale"), "sources": f.get("sources"),
                       "quoted": f.get("quoted"), "ampnum": f.get("ampnum"),
-                      "url": REPORT_URL.format(iid=f["inspection_id"], hn=hn)})
-        if date != cur:
+                      "url": REPORT_URL.format(iid=iid, hn=hn)})
+        if (date, iid) != cur:  # group by report, not by date
             if cur is not None:
                 listing.append("</div>")
-            cur = date
+            cur = (date, iid)
             listing.append("<div class='report'><div class='rhead'><a href='%s'>%s</a> \u00b7 %s \u00b7 %d finding(s)</div>"
-                           % (esc(REPORT_URL.format(iid=f["inspection_id"], hn=hn)), esc(date),
-                              esc(f["inspection_number"]), date_count.get(date, 0)))
+                           % (esc(REPORT_URL.format(iid=iid, hn=hn)), esc(date),
+                              esc(f["inspection_number"]), insp_count.get(iid, 0)))
         listing.append(_finding_card(f, hn, i, rels.get(i)))
     if cur is not None:
         listing.append("</div>")
@@ -1209,13 +1210,13 @@ window.YEARS = @@YEARS_JSON@@;
     var fineCount=window.FINDINGS.filter(function(f){return f.t==='AMP'&&(!y||f.y===y);}).length;
     fcount.textContent=only?('('+fineCount+' fine'+(fineCount===1?'':'s')+')'):'';
     if(only&&!fineCount&&!Object.keys(revealed).length){ listing.innerHTML='<p class="note">No fines on record'+(y?' for '+esc(y):'')+'.</p>'; return; }
-    var byDate={}, order=[];
-    rows.forEach(function(f){ if(!byDate[f.date]){byDate[f.date]=[];order.push(f.date);} byDate[f.date].push(f); });
-    order.sort(); order.reverse();
+    var byKey={}, order=[];
+    rows.forEach(function(f){ var k=f.date+'|'+f.num; if(!byKey[k]){byKey[k]=[];order.push(k);} byKey[k].push(f); });
+    order.sort(function(a,b){ var da=a.split('|')[0], db=b.split('|')[0]; if(da!==db) return da<db?1:-1; return a<b?-1:1; });
     var out='';
-    order.forEach(function(d){
-      var g=byDate[d];
-      out+="<div class='report'><div class='rhead'><a href='"+esc(g[0].url)+"'>"+esc(d)+"</a> \u00b7 "+esc(g[0].num)+" \u00b7 "+g.length+" finding(s)</div>";
+    order.forEach(function(k){
+      var g=byKey[k];
+      out+="<div class='report'><div class='rhead'><a href='"+esc(g[0].url)+"'>"+esc(g[0].date)+"</a> \u00b7 "+esc(g[0].num)+" \u00b7 "+g.length+" finding(s)</div>";
       g.forEach(function(f){ out+=card(f, window.FINDINGS.indexOf(f)); });
       out+="</div>";
     });
