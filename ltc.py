@@ -1197,6 +1197,30 @@ window.YEARS = @@YEARS_JSON@@;
   function val(h,k){ if(k==='findings'){var s=0,lo=+fromV(),hi=+toV();for(var y in h.byyear){var n=+y;if(n>=lo&&n<=hi)s+=h.byyear[y];}return s;} return h[k]||0; }
   function fromV(){var e=document.getElementById('f-from');return e.value||0;}
   function toV(){var e=document.getElementById('f-to');return e.value||9999;}
+  function selVal(id){var e=document.getElementById(id);return (e&&e.value)||'';}
+  function esc2(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+  var FILTER_FIELDS=[{f:'region',sel:'f-region'},{f:'city',sel:'f-city'},{f:'lic',sel:'f-licensee'}];
+  function passes(h, field){
+    var region=selVal('f-region'), city=selVal('f-city'), lic=selVal('f-licensee');
+    if(field!=='region'&&region&&h.region!==region)return false;
+    if(field!=='city'&&city&&h.city!==city)return false;
+    if(field!=='lic'&&lic&&h.lic!==lic)return false;
+    return true;
+  }
+  function optionsFor(field){
+    var o={};
+    window.HOMES.forEach(function(h){if(h[field]&&passes(h,field)){o[h[field]]=1;}});
+    return Object.keys(o).sort();
+  }
+  function syncFilters(){
+    FILTER_FIELDS.forEach(function(pair){
+      var sel=document.getElementById(pair.sel), cur=sel.value;
+      var opts=optionsFor(pair.f), html='<option value="">All</option>';
+      opts.forEach(function(v){html+='<option value="'+esc2(v)+'">'+esc2(v)+'</option>';});
+      sel.innerHTML=html;
+      sel.value=opts.indexOf(cur)!==-1?cur:'';
+    });
+  }
   function render(){
     var region=document.getElementById('f-region').value, city=document.getElementById('f-city').value, lic=document.getElementById('f-licensee').value, fines=document.getElementById('f-fines').checked;
     var tb=document.querySelector('#tbl tbody'), out=[], shown=0;
@@ -1227,10 +1251,14 @@ window.YEARS = @@YEARS_JSON@@;
     th.addEventListener('click',function(){var k=th.getAttribute('data-k');
       if(sortKey===k){sortDir*=-1;}else{sortKey=k;sortDir=(k==='name'||k==='city'||k==='last')?1:-1;}render();});
   });
-  ['f-region','f-city','f-licensee','f-from','f-to','f-fines'].forEach(function(id){
+  FILTER_FIELDS.forEach(function(pair){
+    document.getElementById(pair.sel).addEventListener('change',function(){syncFilters();render();});
+  });
+  ['f-from','f-to','f-fines'].forEach(function(id){
     document.getElementById(id).addEventListener('change',render);
   });
   document.getElementById('f-to').value=window.YEARS[window.YEARS.length-1]||'';
+  syncFilters();
   render();
 })();
 </script>
