@@ -1129,6 +1129,7 @@ details.method p, details.method li{font-size:13px;color:#333}
 <h1>Ontario LTC Inspection Comparison <span class="sub">— @@REGION@@</span></h1>
 <div class="sub">Public inspection findings, Ministry of Long-Term Care · @@DATE_RANGE@@ · generated @@GENERATED@@</div>
 <div class="toolbar">
+<label>Search <input type="search" id="f-q" placeholder="Home name…"></label>
 <label>Region <select id="f-region"><option value="">All</option>@@REGION_OPTS@@</select></label>
 <label>City <select id="f-city"><option value="">All</option>@@CITY_OPTS@@</select></label>
 <label>Licensee <select id="f-licensee"><option value="">All</option>@@LICENSEE_OPTS@@</select></label>
@@ -1200,8 +1201,10 @@ window.YEARS = @@YEARS_JSON@@;
   function selVal(id){var e=document.getElementById(id);return (e&&e.value)||'';}
   function esc2(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
   var FILTER_FIELDS=[{f:'region',sel:'f-region'},{f:'city',sel:'f-city'},{f:'lic',sel:'f-licensee'}];
+  function qVal(){var e=document.getElementById('f-q');return ((e&&e.value)||'').trim().toLowerCase();}
   function passes(h, field){
-    var region=selVal('f-region'), city=selVal('f-city'), lic=selVal('f-licensee');
+    var region=selVal('f-region'), city=selVal('f-city'), lic=selVal('f-licensee'), q=qVal();
+    if(q&&h.name.toLowerCase().indexOf(q)===-1)return false;
     if(field!=='region'&&region&&h.region!==region)return false;
     if(field!=='city'&&city&&h.city!==city)return false;
     if(field!=='lic'&&lic&&h.lic!==lic)return false;
@@ -1222,13 +1225,13 @@ window.YEARS = @@YEARS_JSON@@;
     });
   }
   function render(){
-    var region=document.getElementById('f-region').value, city=document.getElementById('f-city').value, lic=document.getElementById('f-licensee').value, fines=document.getElementById('f-fines').checked;
+    var region=document.getElementById('f-region').value, city=document.getElementById('f-city').value, lic=document.getElementById('f-licensee').value, fines=document.getElementById('f-fines').checked, q=qVal();
     var tb=document.querySelector('#tbl tbody'), out=[], shown=0;
     var list=window.HOMES.slice().sort(function(a,b){var x=val(a,sortKey),y=val(b,sortKey);
       if(typeof x==='string'){x=String(x).toLowerCase();y=String(y).toLowerCase();}
       return (x<y?-1:x>y?1:0)*sortDir;});
     list.forEach(function(h){
-      if(region&&h.region!==region)return; if(city&&h.city!==city)return; if(lic&&h.lic!==lic)return; if(fines&&!(h.amp>0))return;
+      if(q&&h.name.toLowerCase().indexOf(q)===-1)return; if(region&&h.region!==region)return; if(city&&h.city!==city)return; if(lic&&h.lic!==lic)return; if(fines&&!(h.amp>0))return;
       var f=val(h,'findings'); shown++;
       out.push("<tr><td class='name'><a href='"+h.page+"'>"+h.name+"</a><div class='sub'>"+h.city+"</div></td>"+
         "<td>"+h.city+"</td><td class='num strong'>"+f+"</td><td class='num'>$"+Math.round(h.amp).toLocaleString()+
@@ -1237,7 +1240,7 @@ window.YEARS = @@YEARS_JSON@@;
     tb.innerHTML=out.join("");
     var sInsp=0, sFind=0, sCo=0, sFine=0;
     list.forEach(function(h){
-      if(region&&h.region!==region)return; if(city&&h.city!==city)return; if(lic&&h.lic!==lic)return; if(fines&&!(h.amp>0))return;
+      if(q&&h.name.toLowerCase().indexOf(q)===-1)return; if(region&&h.region!==region)return; if(city&&h.city!==city)return; if(lic&&h.lic!==lic)return; if(fines&&!(h.amp>0))return;
       sInsp+=h.insp; sFind+=val(h,'findings'); sCo+=h.co; sFine+=h.amp;
     });
     document.getElementById('agg-homes').textContent=shown;
@@ -1257,6 +1260,7 @@ window.YEARS = @@YEARS_JSON@@;
   ['f-from','f-to','f-fines'].forEach(function(id){
     document.getElementById(id).addEventListener('change',render);
   });
+  document.getElementById('f-q').addEventListener('input',function(){syncFilters();render();});
   document.getElementById('f-to').value=window.YEARS[window.YEARS.length-1]||'';
   syncFilters();
   render();
