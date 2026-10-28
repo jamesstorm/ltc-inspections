@@ -1431,14 +1431,14 @@ def render_home_dashboard(home, insp, findings):
                       "url": REPORT_URL.format(iid=iid, hn=hn)})
         if (date, iid) != cur:  # group by report, not by date
             if cur is not None:
-                listing.append("</div>")
+                listing.append("</details>")
             cur = (date, iid)
-            listing.append("<div class='report'><div class='rhead'><a href='%s'>%s</a> \u00b7 %s \u00b7 %d finding(s)</div>"
+            listing.append("<details class='report'><summary class='rhead'><a href='%s'>%s</a> \u00b7 %s \u00b7 %d finding(s)</summary>"
                            % (esc(REPORT_URL.format(iid=iid, hn=hn)), esc(date),
                               esc(f["inspection_number"]), insp_count.get(iid, 0)))
         listing.append(_finding_card(f, hn, i, rels.get(i)))
     if cur is not None:
-        listing.append("</div>")
+        listing.append("</details>")
     listing_html = "".join(listing) if listing else "<p class='note'>No findings recorded.</p>"
     findings_json = json.dumps(fdata, ensure_ascii=False)
     years_json = json.dumps(years)
@@ -1478,7 +1478,13 @@ h2{font-size:16px;margin:0 0 10px}
 .mixval{width:24px;text-align:right;font-variant-numeric:tabular-nums;font-size:13px}
 select{font-size:13px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:#fff}
 .report{background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 16px;margin-bottom:12px}
-.rhead{font-weight:600;margin-bottom:8px}
+#listing details.report{display:block}
+summary.rhead{list-style:none;font-weight:600;margin-bottom:8px;cursor:pointer;user-select:none}
+summary.rhead::-webkit-details-marker{display:none}
+summary.rhead::before{content:'+';display:inline-block;width:16px;color:var(--muted);font-weight:700}
+details[open]>summary.rhead::before{content:'\u2013'}
+.expctl{color:var(--accent);cursor:pointer}
+.expctl:hover{text-decoration:underline}
 /* finding cards */
 .fcard{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:10px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}
 .cpills{margin-bottom:8px}
@@ -1542,7 +1548,7 @@ footer{margin-top:32px;padding-top:16px;border-top:1px solid var(--line);font-si
 
 <section>
 <h2>All findings</h2>
-<div class="note">Grouped by report (newest first). Fines are shown with their amount and rationale. Each report links to the Ministry's source page.</div>
+<div class="note">Grouped by report (newest first). Fines are shown with their amount and rationale. Each report links to the Ministry's source page. <span class="expctl" id="expall">Expand all</span> / <span class="expctl" id="colall">Collapse all</span>.</div>
 <div id="listing">@@LISTING@@</div>
 </section>
 
@@ -1604,20 +1610,24 @@ window.YEARS = @@YEARS_JSON@@;
     var out='';
     order.forEach(function(k){
       var g=byKey[k];
-      out+="<div class='report'><div class='rhead'><a href='"+esc(g[0].url)+"'>"+esc(g[0].date)+"</a> \u00b7 "+esc(g[0].num)+" \u00b7 "+g.length+" finding(s)</div>";
+      out+="<details class='report'><summary class='rhead'><a href='"+esc(g[0].url)+"'>"+esc(g[0].date)+"</a> \u00b7 "+esc(g[0].num)+" \u00b7 "+g.length+" finding(s)</summary>";
       g.forEach(function(f){ out+=card(f, window.FINDINGS.indexOf(f)); });
-      out+="</div>";
+      out+="</details>";
     });
     listing.innerHTML=out||'<p class="note">No findings recorded.</p>';
   }
   listing.addEventListener('click',function(e){
     var a=e.target; while(a&&!(a.classList&&a.classList.contains('crel')))a=a.parentNode;
     if(!a)return; e.preventDefault();
+    function openReport(id){var d=document.getElementById(id); if(d){var det=d.closest('details'); if(det)det.open=true;}}
     var j=+a.getAttribute('data-rel');
-    if(document.getElementById('fc-'+j)){ flash('fc-'+j); return; }
+    if(document.getElementById('fc-'+j)){ openReport('fc-'+j); flash('fc-'+j); return; }
     revealed[j]=true; renderListing();
+    openReport('fc-'+j);
     setTimeout(function(){ flash('fc-'+j); }, 60);
   });
+  document.getElementById('expall').addEventListener('click',function(){document.querySelectorAll('#listing details').forEach(function(d){d.open=true;});});
+  document.getElementById('colall').addEventListener('click',function(){document.querySelectorAll('#listing details').forEach(function(d){d.open=false;});});
   el.addEventListener('change',function(){mix();renderListing();});
   fo.addEventListener('change',renderListing);
   mix();
