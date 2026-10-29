@@ -518,6 +518,19 @@ def _wn_parse_block(lines, kind):
     return res
 
 
+def controlled_category(kind, title, statute):
+    """Deterministic controlled finding-category label from the cited instrument
+    and top-level statutory section; fallback labels per finding kind."""
+    instrument, section, _ = Corpus.parse_statute(statute or "")
+    if instrument and section:
+        return "%s s. %s" % (instrument, section)
+    if kind == "AMP":
+        return "Administrative Monetary Penalty"
+    if kind == "CO":
+        return "Compliance Order \u2014 Unclassified section"
+    return "Written Notification \u2014 Unclassified section"
+
+
 def parse_findings(wn_html):
     """Split a report's WN_Details HTML into structured finding/fine records.
 
@@ -559,7 +572,7 @@ def parse_findings(wn_html):
         fine = float(finem.group(1).replace(",", "")) if finem else 0.0
         nc = r["nc"] or r["related_nc"]
         title = r["title"] or ""
-        category = "Administrative Monetary Penalty" if kind == "AMP" else (title or "Written Notification")
+        category = controlled_category(kind, title, r["statute"])
         out.append({"seq": len(out)+1, "type": kind, "title": title, "category": category,
                     "nc": nc, "statute": r["statute"], "fine": fine,
                     "source": r["sources"],
@@ -594,7 +607,7 @@ def parse_co_findings(co_html, co_history=0):
             continue
         res["seq"] = len(out) + 1
         res["type"] = "CO"
-        res["category"] = res["title"] or "Compliance Order"
+        res["category"] = controlled_category("CO", res["title"], res.get("statute"))
         res["fine"] = 0.0
         res["ampnum"] = None
         res["rationale"] = None
@@ -1595,7 +1608,7 @@ window.YEARS = @@YEARS_JSON@@;
     items.forEach(function(it){ out+="<div class='mixbar'><div class='mixlbl' title='"+it.k.replace(/'/g,"\\'")+"'>"+it.k+
       "</div><div class='mixtrk'><div class='mixfill' style='width:"+Math.round(100*it.v/mx)+"%'></div></div>"+
       "<div class='mixval'>"+it.v+"</div></div>"; });
-    out+="<div class='note'>"+tot+" finding(s) shown. Share of total per category.</div>";
+    out+="<div class='note'>"+tot+" finding(s) shown. Share of findings by controlled statutory section.</div>";
     document.getElementById('mix').innerHTML=out;
   }
   function renderListing(){
