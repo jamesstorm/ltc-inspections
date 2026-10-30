@@ -30,6 +30,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import unicodedata
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1595,7 +1596,7 @@ window.YEARS = @@YEARS_JSON@@;
     items.forEach(function(it){ out+="<div class='mixbar'><div class='mixlbl' title='"+it.k.replace(/'/g,"\\'")+"'>"+it.k+
       "</div><div class='mixtrk'><div class='mixfill' style='width:"+Math.round(100*it.v/mx)+"%'></div></div>"+
       "<div class='mixval'>"+it.v+"</div></div>"; });
-    out+="<div class='note'>"+tot+" finding(s) shown. Share of total per category.</div>";
+    out+="<div class='note'>"+tot+" finding(s) shown. Share of findings by normalized category.</div>";
     document.getElementById('mix').innerHTML=out;
   }
   function renderListing(){
@@ -1659,9 +1660,46 @@ window.YEARS = @@YEARS_JSON@@;
 
 
 # ---------------------------------------------------------------- report
+def _norm_category_key(s):
+    """Comparison key for a category heading: merge only presentation variants
+    (case, whitespace, apostrophes/quotes/dashes, punctuation spacing, terminal
+    punctuation). Never removes words, rewrites &, or consults statute text."""
+    s = unicodedata.normalize("NFKC", s or "")
+    s = s.replace("\xa0", " ")
+    s = (s.replace("\u2018", "'").replace("\u2019", "'")
+         .replace("\u201c", '"').replace("\u201d", '"')
+         .replace("\u2013", "-").replace("\u2014", "-"))
+    s = re.sub(r"\s+", " ", s).strip()
+    s = re.sub(r"\s*([,;:/()])\s*", r"\1", s)
+    s = re.sub(r"\s*-\s*", "-", s)
+    s = re.sub(r"[.!]+\Z", "", s).strip()
+    return s.casefold()
+
+
+def build_category_map(findings):
+    """Deterministic raw-category -> display-label map across the full findings set.
+    Representative = most common existing raw spelling; ties broken by casefolded
+    text, then exact text, so output is stable across renders."""
+    counts = Counter()
+    for f in findings:
+        counts[f["category"]] += 1
+    groups = defaultdict(list)
+    for raw, cnt in counts.items():
+        groups[_norm_category_key(raw)].append((raw, cnt))
+    label = {}
+    for members in groups.values():
+        rep = max(members, key=lambda mc: (mc[1], mc[0].casefold(), mc[0]))[0]
+        for raw, _ in members:
+            label[raw] = rep
+    return label
+
+
 def cmd_report(args):
     c = db()
     homes, insp, findings = load(c)
+    cat_map = build_category_map(findings)
+    for f in findings:
+        f["category"] = cat_map.get(f["category"], f["category"])
     if not insp:
         print("No data yet. Run: python3 ltc.py fetch")
         return
